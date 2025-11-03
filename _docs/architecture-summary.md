@@ -65,7 +65,7 @@ See `_docs/database-schema.md` for complete schema with indexes, constraints, an
 
 ### CLI Execution
 ```bash
-bun run qa.ts <game-url>
+npx tsx qa.ts --url <game-url>
 ```
 
 **Flow:**
@@ -174,7 +174,7 @@ See `_docs/game-manifest-schema.md` for complete schema with examples.
 
 | Component | Technology | Purpose |
 |-----------|-----------|---------|
-| **Runtime** | Bun | Fast TypeScript execution |
+| **Runtime** | Node.js | TypeScript execution via tsx |
 | **Database** | Supabase (PostgreSQL) | Games, manifests, test results |
 | **File Storage** | Supabase Storage | Screenshots, console logs |
 | **Browser Automation** | Browserbase + Stagehand | Headless browser control |
@@ -233,7 +233,7 @@ User → Web UI → Games Library → Game Detail → Test History → Test Resu
 
 ### 1. CLI User (QA Engineer)
 1. Create game via Web UI (one-time setup)
-2. Run test: `bun run qa.ts <game-url>`
+2. Run test: `npx tsx qa.ts --url <game-url>`
 3. Select manifest version from prompt
 4. View results in terminal (JSON)
 5. View detailed results in Web UI later

@@ -5,8 +5,8 @@
   "main": "qa.ts",
   "type": "module",
   "scripts": {
-    "start": "bun run qa.ts",
-    "dev": "bun run --watch qa.ts",
+    "start": "tsx qa.ts",
+    "dev": "tsx watch qa.ts",
     "type-check": "tsc --noEmit"
   },
   "keywords": [
@@ -19,18 +19,19 @@
   "author": "",
   "license": "MIT",
   "dependencies": {
+    "@browserbasehq/stagehand": "^1.6.0",
     "@supabase/supabase-js": "^2.39.0",
-    "commander": "^11.1.0",
-    "ai": "^3.0.0"
+    "ai": "^3.0.0",
+    "commander": "^11.1.0"
   },
   "devDependencies": {
-    "@types/bun": "^1.0.0",
     "@types/node": "^20.10.5",
     "supabase": "^1.142.2",
+    "tsx": "^4.7.0",
     "typescript": "^5.3.3"
   },
   "engines": {
-    "bun": ">=1.0.0"
+    "node": ">=18.0.0"
   }
 }
 

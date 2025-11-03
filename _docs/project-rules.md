@@ -70,7 +70,7 @@ dreamup-qa/
 │
 ├── qa.ts                    # Main CLI entry point
 ├── lambda.ts                # Lambda entry point (if separate)
-├── bun.lockb                # Bun lock file (commit this)
+├── package-lock.json        # npm lock file (commit this)
 ├── package.json
 ├── tsconfig.json
 ├── .env.example             # Environment variable template
@@ -568,7 +568,7 @@ export function loadConfig(): Config {
 
 - ✅ All source code (`src/`)
 - ✅ Configuration files (`tsconfig.json`, `package.json`)
-- ✅ Lock files (`bun.lockb`)
+- ✅ Lock files (`package-lock.json`)
 - ✅ Documentation (`_docs/`, `README.md`)
 - ✅ `.env.example` (template, no secrets)
 
@@ -576,7 +576,7 @@ export function loadConfig(): Config {
 
 - ❌ `.env` and `.env.local` (secrets)
 - ❌ `node_modules/`
-- ❌ `.bun/` (Bun cache)
+- ❌ `.bun/` (Bun cache - legacy, not used)
 - ❌ `artifacts/` (generated files, unless `.gitkeep`)
 - ❌ Build outputs
 

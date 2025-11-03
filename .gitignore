@@ -5,9 +5,9 @@
 # Dependencies
 node_modules/
 
-# Bun
+# Node.js / npm
 .bun/
-bun.lockb
+package-lock.json
 
 # Build outputs
 dist/

@@ -2,13 +2,13 @@
 
 ## Summary
 
-**Runtime:** Bun  
+**Runtime:** Node.js  
 **Database:** Supabase (PostgreSQL)  
 **File Storage:** Supabase Storage  
 **AI/LLM SDK:** Vercel AI SDK  
 **Browser Automation:** Browserbase + Stagehand  
 **CLI Framework:** Commander.js  
-**Package Manager:** Bun  
+**Package Manager:** npm  
 **Lambda Deployment:** AWS Lambda  
 **Web Framework (Stretch):** Next.js
 
@@ -18,36 +18,37 @@ This document outlines the complete technology stack for the DreamUp QA Pipeline
 
 ## Core Stack Decisions
 
-### Runtime: Bun
+### Runtime: Node.js
 
-**Decision:** Use Bun as the primary runtime for TypeScript execution.
+**Decision:** Use Node.js as the primary runtime for TypeScript execution.
 
 **Rationale:**
-- Fast startup time crucial for CLI tool responsiveness
-- Native TypeScript support eliminates need for transpilation
-- Built-in package manager simplifies dependency management
-- Matches project specification example (`bun run qa.ts`)
+- Mature ecosystem with extensive package compatibility
+- Full Playwright support (required for Browserbase/Stagehand)
+- Excellent debugging tools and developer experience
+- Industry standard with extensive documentation
+- Better compatibility with browser automation libraries
 
 **Best Practices:**
-- Use `.bun` directory for cached dependencies (faster installs)
-- Use `bun --bun` flag to ensure Bun runtime (not Node.js fallback)
+- Use `tsx` for TypeScript execution (no transpilation needed)
 - Keep files under 500 lines for AI tool compatibility
+- Use `npm ci` in CI/CD for reproducible builds
+- Use Node.js 18+ for modern JavaScript features
 
 **Limitations:**
-- Newer ecosystem with fewer community resources than Node.js
-- Some npm packages may have compatibility issues (test thoroughly)
-- Lambda deployment requires bundling (use `bun build` or esbuild)
-- Less mature debugging tools compared to Node.js
+- Requires TypeScript execution tool (tsx) for development
+- Requires separate TypeScript execution tool (tsx)
+- Lambda deployment requires bundling (use esbuild or webpack)
 
 **Important Considerations:**
 - Always test Lambda deployments with bundled code
-- Some libraries may require Node.js polyfills (Bun handles most automatically)
-- Use `bun install --frozen-lockfile` in CI/CD for reproducible builds
+- Use `tsx` for development and `tsc` + `node` for production if needed
+- Ensure Node.js version matches across development and deployment
 
 **Common Pitfalls:**
-- Assuming all npm packages work perfectly (test compatibility)
-- Not bundling properly for Lambda (can cause runtime errors)
-- Forgetting to specify `--bun` flag in scripts
+- Not installing `tsx` as a dev dependency
+- Using `node` directly on `.ts` files (won't work - use `tsx`)
+- Forgetting to update package.json scripts after switching runtimes
 
 ---
 
@@ -183,7 +184,7 @@ See `_docs/database-schema.md` for complete schema definition, relationships, in
 **Decision:** Use Commander.js for command-line argument parsing and CLI structure.
 
 **Rationale:**
-- Industry standard for Node.js/Bun CLIs
+- Industry standard for Node.js CLIs
 - Mature and well-documented
 - TypeScript support available
 - Handles help text generation automatically
@@ -215,36 +216,36 @@ See `_docs/database-schema.md` for complete schema definition, relationships, in
 
 ---
 
-### Package Manager: Bun
+### Package Manager: npm
 
-**Decision:** Use Bun as the package manager (bundled with Bun runtime).
+**Decision:** Use npm as the package manager (bundled with Node.js).
 
 **Rationale:**
-- Integrated with Bun runtime (single tool)
-- Fastest package installation available
-- No separate tooling needed
-- Lock file format compatible with npm
+- Integrated with Node.js runtime (standard installation)
+- Industry standard with extensive documentation
+- Excellent compatibility with all npm packages
+- Human-readable lock file format (package-lock.json)
 
 **Best Practices:**
-- Commit `bun.lockb` file to version control
-- Use `bun install --frozen-lockfile` in CI/CD
+- Commit `package-lock.json` file to version control
+- Use `npm ci` in CI/CD for reproducible builds
 - Keep dependencies minimal (faster installs, smaller bundles)
-- Regularly update dependencies (`bun update`)
-- Use `bun add` for new packages (not npm install)
+- Regularly update dependencies (`npm update`)
+- Use `npm install <package>` for new packages
 
 **Limitations:**
-- Requires Bun runtime (not available without Bun)
-- Lock file is binary format (not human-readable)
-- Some packages may need Node.js-specific configurations
+- Standard npm package installation speed
+- Requires Node.js runtime
+- Lock file can be large (but human-readable)
 
 **Important Considerations:**
-- Lock file should always be committed to git
+- Lock file (`package-lock.json`) should always be committed to git
 - Test after dependency updates (compatibility issues possible)
-- Use `bun pm` commands for package management utilities
+- Use `npm audit` to check for security vulnerabilities
 
 **Common Pitfalls:**
 - Not committing lock file (reproducibility issues)
-- Mixing npm and bun commands (inconsistent lock files)
+- Mixing npm and other package managers (inconsistent lock files)
 - Not testing after updates (breaking changes)
 
 ---
@@ -298,7 +299,7 @@ See `_docs/database-schema.md` for complete schema definition, relationships, in
 - Integrates with other AWS services
 
 **Best Practices:**
-- Bundle TypeScript code with `bun build` or `esbuild` before deployment
+- Bundle TypeScript code with `esbuild` or `webpack` before deployment
 - Keep bundle size under 50 MB (Lambda limit)
 - Use Lambda layers for shared dependencies if needed
 - Implement proper error handling and logging
@@ -392,7 +393,7 @@ dreamup-qa/
 │   └── utils/           # Shared utilities
 ├── artifacts/           # Local artifact storage (optional fallback)
 ├── qa.ts                # Main CLI entry point
-├── bun.lockb            # Bun lock file (commit this)
+├── package-lock.json    # npm lock file (commit this)
 ├── package.json
 └── tsconfig.json
 ```
@@ -402,12 +403,12 @@ dreamup-qa/
 ## Development Workflow
 
 1. **Local Development:**
-   - Use `bun run qa.ts <game-url>` for testing
+   - Use `npx tsx qa.ts --url <game-url>` for testing
    - Store artifacts locally or in Supabase Storage
    - Use `.env.local` for local environment variables
 
 2. **Lambda Deployment:**
-   - Bundle code with `bun build`
+   - Bundle code with `esbuild` or `webpack`
    - Deploy to AWS Lambda via CLI or CI/CD
    - Set environment variables in Lambda configuration
 

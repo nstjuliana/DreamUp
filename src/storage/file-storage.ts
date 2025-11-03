@@ -1,221 +1,227 @@
 /**
  * File: src/storage/file-storage.ts
  * 
- * File storage operations for screenshots and console logs.
+ * Supabase Storage client for file operations.
  * 
- * This module handles uploading and managing artifacts (screenshots, logs) in Supabase Storage.
- * Includes fallback to local filesystem if Supabase Storage is unavailable.
+ * This module handles uploading screenshots and console logs to Supabase Storage.
+ * It provides functions for creating storage buckets and uploading files with proper
+ * error handling and path organization.
  * 
  * @module FileStorage
  */
 
-import { getDatabase } from './database.js';
+import { createClient, SupabaseClient } from '@supabase/supabase-js';
+import { getConfig } from '../utils/config.js';
 import { StorageError } from '../utils/errors.js';
 import { logger } from '../utils/logger.js';
-import { STORAGE_BUCKETS, ARTIFACT_PATHS } from '../utils/constants.js';
+
+/**
+ * Storage bucket name for test artifacts.
+ */
+const ARTIFACTS_BUCKET = 'artifacts';
+
+/**
+ * Supabase client instance for storage operations.
+ */
+let storageClient: SupabaseClient | null = null;
+
+/**
+ * Initialize storage client.
+ * 
+ * Creates a Supabase client configured for storage operations.
+ * Uses service role key for admin access to storage buckets.
+ * 
+ * @returns {SupabaseClient} Configured Supabase client
+ */
+function getStorageClient(): SupabaseClient {
+  if (!storageClient) {
+    const config = getConfig();
+    storageClient = createClient(
+      config.supabase.url,
+      config.supabase.serviceRoleKey
+    );
+  }
+  return storageClient;
+}
+
+/**
+ * Ensure artifacts bucket exists.
+ * 
+ * Checks if the artifacts bucket exists and creates it if needed.
+ * Bucket is configured for public access to allow direct URL access.
+ * 
+ * @returns {Promise<void>}
+ * @throws {StorageError} If bucket creation fails
+ */
+export async function ensureBucketExists(): Promise<void> {
+  const client = getStorageClient();
+  
+  try {
+    // Check if bucket exists
+    const { data: buckets, error: listError } = await client.storage.listBuckets();
+    
+    if (listError) {
+      throw new StorageError('Failed to list storage buckets', { error: listError });
+    }
+    
+    const bucketExists = buckets?.some(b => b.name === ARTIFACTS_BUCKET);
+    
+    if (!bucketExists) {
+      // Create bucket with public access
+      const { error: createError } = await client.storage.createBucket(ARTIFACTS_BUCKET, {
+        public: true,
+        fileSizeLimit: 52428800, // 50 MB
+      });
+      
+      if (createError) {
+        throw new StorageError('Failed to create artifacts bucket', { error: createError });
+      }
+      
+      logger.info('Artifacts bucket created', { bucket: ARTIFACTS_BUCKET });
+    }
+  } catch (error) {
+    if (error instanceof StorageError) {
+      throw error;
+    }
+    throw new StorageError('Failed to ensure bucket exists', { error });
+  }
+}
 
 /**
  * Upload screenshot to Supabase Storage.
  * 
  * Uploads a screenshot buffer to Supabase Storage and returns the public URL.
+ * Files are organized by test ID: artifacts/{testId}/screenshots/{index}.png
  * 
- * @param {string} testRunId - Test run ID for organizing screenshots
- * @param {Buffer} imageBuffer - Screenshot image buffer
- * @param {number} index - Screenshot index (for ordering)
+ * @param {Buffer} buffer - Screenshot image buffer
+ * @param {string} testId - Unique test run identifier
+ * @param {number} index - Screenshot index (for ordering multiple screenshots)
  * @returns {Promise<string>} Public URL of uploaded screenshot
  * @throws {StorageError} If upload fails
  * 
  * @example
  * ```typescript
- * const url = await uploadScreenshot('test-123', imageBuffer, 0);
+ * const url = await uploadScreenshot(imageBuffer, 'test-123', 0);
  * console.log(`Screenshot uploaded: ${url}`);
  * ```
  */
 export async function uploadScreenshot(
-  testRunId: string,
-  imageBuffer: Buffer,
+  buffer: Buffer,
+  testId: string,
   index: number
 ): Promise<string> {
-  const db = getDatabase();
-  const fileName = `${testRunId}/screenshot-${String(index).padStart(3, '0')}.png`;
+  const client = getStorageClient();
+  
+  // Ensure bucket exists before uploading
+  await ensureBucketExists();
+  
+  // Construct file path: artifacts/{testId}/screenshots/{index}.png
+  const timestamp = Date.now();
+  const fileName = `${String(index).padStart(3, '0')}-${timestamp}.png`;
+  const filePath = `${testId}/screenshots/${fileName}`;
   
   try {
-    const { error } = await db.storage
-      .from(STORAGE_BUCKETS.SCREENSHOTS)
-      .upload(fileName, imageBuffer, {
+    // Upload file to storage
+    const { error: uploadError } = await client.storage
+      .from(ARTIFACTS_BUCKET)
+      .upload(filePath, buffer, {
         contentType: 'image/png',
-        upsert: true,
+        upsert: false,
       });
-
-    if (error) {
-      logger.error('Failed to upload screenshot', { testRunId, index, error: error.message });
-      throw new StorageError(`Failed to upload screenshot: ${error.message}`, {
-        testRunId,
+    
+    if (uploadError) {
+      throw new StorageError('Failed to upload screenshot', {
+        testId,
         index,
-        error,
+        path: filePath,
+        error: uploadError,
       });
     }
-
+    
     // Get public URL
-    const { data: urlData } = db.storage
-      .from(STORAGE_BUCKETS.SCREENSHOTS)
-      .getPublicUrl(fileName);
-
-    logger.debug('Screenshot uploaded', { testRunId, index, url: urlData.publicUrl });
+    const { data: urlData } = client.storage
+      .from(ARTIFACTS_BUCKET)
+      .getPublicUrl(filePath);
+    
+    logger.info('Screenshot uploaded', { testId, index, url: urlData.publicUrl });
     return urlData.publicUrl;
   } catch (error) {
-    logger.error('Screenshot upload error', { testRunId, index, error });
-    throw new StorageError('Screenshot upload failed', { testRunId, index, error });
+    if (error instanceof StorageError) {
+      throw error;
+    }
+    throw new StorageError('Failed to upload screenshot', {
+      testId,
+      index,
+      error,
+    });
   }
 }
 
 /**
  * Upload console logs to Supabase Storage.
  * 
- * Uploads console logs as a text file to Supabase Storage.
+ * Uploads console logs as a text file to Supabase Storage and returns the public URL.
+ * Files are organized by test ID: artifacts/{testId}/logs/console.log
  * 
- * @param {string} testRunId - Test run ID for organizing logs
- * @param {string} logs - Console logs content
- * @returns {Promise<string>} Public URL of uploaded logs
+ * @param {string} logs - Console logs content (plain text)
+ * @param {string} testId - Unique test run identifier
+ * @returns {Promise<string>} Public URL of uploaded log file
  * @throws {StorageError} If upload fails
  * 
  * @example
  * ```typescript
- * const url = await uploadConsoleLogs('test-123', logContent);
+ * const url = await uploadConsoleLogs(logsText, 'test-123');
  * console.log(`Logs uploaded: ${url}`);
  * ```
  */
 export async function uploadConsoleLogs(
-  testRunId: string,
-  logs: string
+  logs: string,
+  testId: string
 ): Promise<string> {
-  const db = getDatabase();
-  const fileName = `${testRunId}/console.log`;
+  const client = getStorageClient();
+  
+  // Ensure bucket exists before uploading
+  await ensureBucketExists();
+  
+  // Construct file path: artifacts/{testId}/logs/console.log
+  const timestamp = Date.now();
+  const fileName = `console-${timestamp}.log`;
+  const filePath = `${testId}/logs/${fileName}`;
   
   try {
-    const { error } = await db.storage
-      .from(STORAGE_BUCKETS.CONSOLE_LOGS)
-      .upload(fileName, logs, {
+    // Convert logs string to buffer
+    const buffer = Buffer.from(logs, 'utf-8');
+    
+    // Upload file to storage
+    const { error: uploadError } = await client.storage
+      .from(ARTIFACTS_BUCKET)
+      .upload(filePath, buffer, {
         contentType: 'text/plain',
-        upsert: true,
+        upsert: false,
       });
-
-    if (error) {
-      logger.error('Failed to upload console logs', { testRunId, error: error.message });
-      throw new StorageError(`Failed to upload console logs: ${error.message}`, {
-        testRunId,
-        error,
+    
+    if (uploadError) {
+      throw new StorageError('Failed to upload console logs', {
+        testId,
+        path: filePath,
+        error: uploadError,
       });
     }
-
+    
     // Get public URL
-    const { data: urlData } = db.storage
-      .from(STORAGE_BUCKETS.CONSOLE_LOGS)
-      .getPublicUrl(fileName);
-
-    logger.debug('Console logs uploaded', { testRunId, url: urlData.publicUrl });
+    const { data: urlData } = client.storage
+      .from(ARTIFACTS_BUCKET)
+      .getPublicUrl(filePath);
+    
+    logger.info('Console logs uploaded', { testId, url: urlData.publicUrl });
     return urlData.publicUrl;
   } catch (error) {
-    logger.error('Console logs upload error', { testRunId, error });
-    throw new StorageError('Console logs upload failed', { testRunId, error });
+    if (error instanceof StorageError) {
+      throw error;
+    }
+    throw new StorageError('Failed to upload console logs', {
+      testId,
+      error,
+    });
   }
 }
-
-/**
- * Delete test run artifacts from storage.
- * 
- * Removes all screenshots and logs associated with a test run.
- * 
- * @param {string} testRunId - Test run ID
- * @returns {Promise<void>}
- * @throws {StorageError} If deletion fails
- * 
- * @example
- * ```typescript
- * await deleteTestArtifacts('test-123');
- * ```
- */
-export async function deleteTestArtifacts(testRunId: string): Promise<void> {
-  const db = getDatabase();
-  
-  try {
-    // Delete screenshots
-    const { error: screenshotError } = await db.storage
-      .from(STORAGE_BUCKETS.SCREENSHOTS)
-      .remove([`${testRunId}/`]);
-
-    if (screenshotError) {
-      logger.warn('Failed to delete screenshots', { testRunId, error: screenshotError.message });
-    }
-
-    // Delete console logs
-    const { error: logsError } = await db.storage
-      .from(STORAGE_BUCKETS.CONSOLE_LOGS)
-      .remove([`${testRunId}/console.log`]);
-
-    if (logsError) {
-      logger.warn('Failed to delete console logs', { testRunId, error: logsError.message });
-    }
-
-    logger.debug('Test artifacts deleted', { testRunId });
-  } catch (error) {
-    logger.error('Error deleting test artifacts', { testRunId, error });
-    throw new StorageError('Failed to delete test artifacts', { testRunId, error });
-  }
-}
-
-/**
- * Save screenshot to local filesystem (fallback).
- * 
- * Saves screenshot to local artifacts directory when Supabase Storage is unavailable.
- * 
- * @param {string} testRunId - Test run ID
- * @param {Buffer} imageBuffer - Screenshot image buffer
- * @param {number} index - Screenshot index
- * @returns {Promise<string>} Local file path
- * 
- * @example
- * ```typescript
- * const path = await saveScreenshotLocally('test-123', buffer, 0);
- * ```
- */
-export async function saveScreenshotLocally(
-  testRunId: string,
-  _imageBuffer: Buffer,
-  index: number
-): Promise<string> {
-  // Placeholder: Implementation would use Node.js fs module
-  // For now, just return a mock path
-  const fileName = `screenshot-${String(index).padStart(3, '0')}.png`;
-  const filePath = `${ARTIFACT_PATHS.SCREENSHOTS}/${testRunId}/${fileName}`;
-  
-  logger.debug('Screenshot saved locally (placeholder)', { testRunId, index, filePath });
-  return filePath;
-}
-
-/**
- * Save console logs to local filesystem (fallback).
- * 
- * Saves console logs to local artifacts directory when Supabase Storage is unavailable.
- * 
- * @param {string} testRunId - Test run ID
- * @param {string} logs - Console logs content
- * @returns {Promise<string>} Local file path
- * 
- * @example
- * ```typescript
- * const path = await saveLogsLocally('test-123', logContent);
- * ```
- */
-export async function saveLogsLocally(
-  testRunId: string,
-  _logs: string
-): Promise<string> {
-  // Placeholder: Implementation would use Node.js fs module
-  // For now, just return a mock path
-  const filePath = `${ARTIFACT_PATHS.LOGS}/${testRunId}/console.log`;
-  
-  logger.debug('Console logs saved locally (placeholder)', { testRunId, filePath });
-  return filePath;
-}
-

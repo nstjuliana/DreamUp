@@ -36,7 +36,7 @@ All execution paths share the same core QA agent logic and store results in a da
 **Execution Steps:**
 
 1. **Command Execution**
-   - User runs: `bun run qa.ts <game-url>`
+   - User runs: `npx tsx qa.ts --url <game-url>`
    - Optional flags:
      - `--manifest <version-name>`: Use specific manifest version
      - `--no-manifest`: Skip manifest usage

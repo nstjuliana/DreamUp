@@ -1,241 +1,240 @@
 /**
  * File: src/agent/qa-agent.ts
  * 
- * Main QA Agent orchestrator.
+ * QA agent orchestrator for browser game testing.
  * 
- * This module coordinates the entire QA testing workflow: initializing the browser,
- * loading the game, interacting with it, capturing evidence, evaluating results,
- * and saving test outcomes. It serves as the primary orchestration layer.
+ * This module provides the main QA agent that orchestrates the entire testing workflow:
+ * Initialize browser → Load game → Capture evidence → Collect logs → Close session.
+ * Handles timeouts, errors, and ensures proper cleanup of resources.
  * 
  * @module QAAgent
  */
 
-import type { Game, GameManifest, TestRun } from '../storage/types.js';
-import { logger } from '../utils/logger.js';
+import { BrowserClient } from '../browser/browser-client.js';
+import { captureScreenshot } from '../browser/screenshot-capture.js';
+import { collectConsoleLogs, finalizeConsoleLogs } from '../browser/console-logger.js';
+import type { ConsoleLogEntry } from '../browser/console-logger.js';
+import type { TestResult } from '../cli/output-formatter.js';
+import { createSuccessResult, createErrorResult, createTimeoutResult } from '../cli/output-formatter.js';
 import { QAAgentError } from '../utils/errors.js';
+import { logger } from '../utils/logger.js';
+import { MAX_EXECUTION_TIME_MS } from '../utils/constants.js';
 
 /**
- * QA Agent configuration interface.
+ * QA agent execution result.
  */
-export interface QAAgentConfig {
-  /** Game to test */
-  game: Game;
-  /** Optional manifest for guided testing */
-  manifest?: GameManifest;
-  /** Execution method (cli, lambda, web) */
-  executionMethod: 'cli' | 'lambda' | 'web';
+export interface AgentResult {
+  success: boolean;
+  result: TestResult;
+  duration_ms: number;
 }
 
 /**
- * Test result interface.
- */
-export interface TestResult {
-  status: 'pass' | 'fail' | 'error' | 'timeout';
-  playabilityScore?: number;
-  issues: string[];
-  screenshots: string[];
-  consoleLogs?: string;
-  durationMs: number;
-  metadata: Record<string, unknown>;
-}
-
-/**
- * QAAgent class - Main orchestrator for game testing.
+ * QA Agent for autonomous game testing.
  * 
- * Coordinates browser automation, evidence capture, and LLM evaluation
- * to test browser games autonomously.
- * 
- * Workflow:
- * 1. Initialize browser session
- * 2. Load game URL
- * 3. Find and click start button (using manifest or AI detection)
- * 4. Simulate gameplay with controls
- * 5. Capture screenshots and console logs
- * 6. Evaluate playability with LLM
- * 7. Save results to database
- * 
- * @example
- * ```typescript
- * const agent = new QAAgent({ game, manifest, executionMethod: 'cli' });
- * const result = await agent.runTest();
- * console.log(`Test status: ${result.status}`);
- * ```
+ * Orchestrates the complete testing workflow including browser initialization,
+ * game loading, evidence capture, and result generation.
  */
 export class QAAgent {
-  private config: QAAgentConfig;
-  private startTime: number = 0;
-
-  /**
-   * Create a QA Agent instance.
-   * 
-   * @param {QAAgentConfig} config - Agent configuration
-   */
-  constructor(config: QAAgentConfig) {
-    this.config = config;
-    logger.info('QA Agent initialized', {
-      gameId: config.game.id,
-      gameName: config.game.name,
-      hasManifest: !!config.manifest,
-    });
+  private browserClient: BrowserClient;
+  private consoleLogEntries: ConsoleLogEntry[] = [];
+  
+  constructor() {
+    this.browserClient = new BrowserClient();
   }
-
+  
   /**
-   * Run complete QA test.
+   * Run QA test for a game.
    * 
-   * Executes the full testing workflow and returns results.
+   * Executes the complete QA workflow:
+   * 1. Initialize browser session
+   * 2. Load game URL
+   * 3. Wait for initial render
+   * 4. Capture screenshot
+   * 5. Collect console logs
+   * 6. Close browser session
+   * 7. Return structured result
    * 
-   * @returns {Promise<TestResult>} Test results
-   * @throws {QAAgentError} If test execution fails
+   * Includes timeout handling (5 minutes max) and proper cleanup even on errors.
+   * 
+   * @param {string} gameUrl - URL of the game to test
+   * @param {string} testId - Unique identifier for this test run
+   * @param {string} [gameName] - Optional game name for result context
+   * @returns {Promise<AgentResult>} Test execution result
    * 
    * @example
    * ```typescript
-   * const result = await agent.runTest();
+   * const agent = new QAAgent();
+   * const result = await agent.run('https://example.com/game', 'test-123', 'Example Game');
+   * console.log(`Test status: ${result.result.status}`);
    * ```
    */
-  async runTest(): Promise<TestResult> {
-    this.startTime = Date.now();
+  async run(
+    gameUrl: string,
+    testId: string,
+    gameName?: string
+  ): Promise<AgentResult> {
+    const startTime = Date.now();
+    let screenshotUrl: string | null = null;
+    let consoleLogsUrl: string | null = null;
     
     try {
-      logger.info('Starting test execution', { gameUrl: this.config.game.game_url });
-
-      // Placeholder implementation
-      // Full implementation will be added in MVP phase
+      logger.info('Starting QA test', { testId, gameUrl, gameName });
       
-      const durationMs = Date.now() - this.startTime;
+      // Set up timeout
+      const timeoutPromise = this.createTimeout(testId);
+      const testPromise = this.executeTest(gameUrl, testId);
       
-      logger.info('Test execution complete (placeholder)', { durationMs });
+      // Race between test execution and timeout
+      const result = await Promise.race([testPromise, timeoutPromise]);
+      
+      const duration_ms = Date.now() - startTime;
+      
+      logger.info('QA test completed', {
+        testId,
+        status: result.status,
+        duration_ms,
+      });
       
       return {
-        status: 'pass',
-        playabilityScore: 0,
-        issues: [],
-        screenshots: [],
-        consoleLogs: '',
-        durationMs,
-        metadata: {
-          gameId: this.config.game.id,
-          manifestId: this.config.manifest?.id,
-          executionMethod: this.config.executionMethod,
+        success: result.status === 'pass' || result.status === 'fail',
+        result: {
+          ...result,
+          duration_ms,
+          game_url: gameUrl,
+          game_name: gameName,
+          test_id: testId,
         },
+        duration_ms,
       };
     } catch (error) {
-      const durationMs = Date.now() - this.startTime;
-      logger.error('Test execution failed', { error, durationMs });
+      const duration_ms = Date.now() - startTime;
+      const message = error instanceof Error ? error.message : String(error);
       
-      throw new QAAgentError(
-        `Test execution failed: ${error instanceof Error ? error.message : String(error)}`,
-        { gameId: this.config.game.id, error }
-      );
+      logger.error('QA test failed with error', {
+        testId,
+        error: message,
+        duration_ms,
+      });
+      
+      // Return error result
+      return {
+        success: false,
+        result: createErrorResult(message, {
+          screenshots: screenshotUrl ? [screenshotUrl] : [],
+          console_logs: consoleLogsUrl,
+          duration_ms,
+          game_url: gameUrl,
+          game_name: gameName,
+          test_id: testId,
+        }),
+        duration_ms,
+      };
+    } finally {
+      // Always close browser session
+      await this.browserClient.closeSession();
     }
   }
-
+  
   /**
-   * Initialize browser session.
+   * Execute the test workflow.
    * 
-   * Sets up browser automation client (Browserbase + Stagehand).
+   * Internal method that runs the actual test steps without timeout handling.
    * 
-   * @returns {Promise<void>}
+   * @param {string} gameUrl - Game URL to test
+   * @param {string} testId - Test run identifier
+   * @returns {Promise<TestResult>} Test result
+   * @private
    */
-  private async _initializeBrowser(): Promise<void> {
-    // Placeholder: Will be implemented in MVP phase
-    logger.debug('Browser initialization (placeholder)');
-  }
-
-  /**
-   * Load game in browser.
-   * 
-   * Navigates to game URL and waits for page load.
-   * 
-   * @returns {Promise<void>}
-   */
-  private async _loadGame(): Promise<void> {
-    // Placeholder: Will be implemented in MVP phase
-    logger.debug('Game loading (placeholder)', { url: this.config.game.game_url });
-  }
-
-  /**
-   * Find and click start button.
-   * 
-   * Uses manifest if available, otherwise uses AI detection.
-   * 
-   * @returns {Promise<void>}
-   */
-  private async _clickStartButton(): Promise<void> {
-    // Placeholder: Will be implemented in MVP phase
-    logger.debug('Start button click (placeholder)');
-  }
-
-  /**
-   * Simulate gameplay interactions.
-   * 
-   * Uses controls from manifest or heuristic approach.
-   * 
-   * @returns {Promise<void>}
-   */
-  private async _simulateGameplay(): Promise<void> {
-    // Placeholder: Will be implemented in MVP phase
-    logger.debug('Gameplay simulation (placeholder)');
-  }
-
-  /**
-   * Capture evidence (screenshots, console logs).
-   * 
-   * @returns {Promise<void>}
-   */
-  private async _captureEvidence(): Promise<void> {
-    // Placeholder: Will be implemented in MVP phase
-    logger.debug('Evidence capture (placeholder)');
-  }
-
-  /**
-   * Evaluate game with LLM.
-   * 
-   * Sends evidence to LLM for playability assessment.
-   * 
-   * @returns {Promise<void>}
-   */
-  private async _evaluateWithLLM(): Promise<void> {
-    // Placeholder: Will be implemented in MVP phase
-    logger.debug('LLM evaluation (placeholder)');
-  }
-
-  /**
-   * Save test results to database.
-   * 
-   * @param {TestResult} result - Test results to save
-   * @returns {Promise<TestRun>} Saved test run record
-   */
-  private async _saveResults(result: TestResult): Promise<TestRun> {
-    // Placeholder: Will be implemented in MVP phase
-    logger.debug('Results saving (placeholder)', { status: result.status });
+  private async executeTest(
+    gameUrl: string,
+    testId: string
+  ): Promise<TestResult> {
+    let screenshotUrl: string | null = null;
+    let consoleLogsUrl: string | null = null;
+    const issues: string[] = [];
     
-    // Return mock TestRun for now
-    return {
-      id: 'placeholder-id',
-      game_id: this.config.game.id,
-      manifest_id: this.config.manifest?.id || null,
-      status: result.status,
-      playability_score: result.playabilityScore || null,
-      issues: result.issues as any,
-      screenshots: result.screenshots,
-      console_logs: result.consoleLogs || null,
-      execution_method: this.config.executionMethod,
-      duration_ms: result.durationMs,
-      created_at: new Date().toISOString(),
-      metadata: result.metadata as any,
-    };
+    try {
+      // Step 1: Initialize browser session
+      logger.info('Initializing browser session', { testId });
+      await this.browserClient.initializeSession();
+      
+      // Step 2: Set up console log collection
+      logger.info('Setting up console log collection', { testId });
+      const logsResult = await collectConsoleLogs(this.browserClient, testId);
+      this.consoleLogEntries = logsResult.entries;
+      
+      // Step 3: Load game URL
+      logger.info('Loading game', { testId, gameUrl });
+      await this.browserClient.loadGame(gameUrl);
+      
+      // Step 4: Wait for initial render
+      logger.info('Waiting for game to load', { testId });
+      await this.browserClient.waitForLoad(5000); // Wait 5 seconds after load
+      
+      // Step 5: Capture screenshot
+      logger.info('Capturing screenshot', { testId });
+      screenshotUrl = await captureScreenshot(this.browserClient, testId, 0);
+      
+      if (!screenshotUrl) {
+        issues.push('Failed to capture screenshot');
+      }
+      
+      // Step 6: Finalize console logs
+      logger.info('Finalizing console logs', { testId });
+      consoleLogsUrl = await finalizeConsoleLogs(this.consoleLogEntries, testId);
+      
+      // Step 7: Check for console errors
+      const errorLogs = this.consoleLogEntries.filter(e => e.type === 'error');
+      if (errorLogs.length > 0) {
+        issues.push(`${errorLogs.length} console error(s) detected`);
+        // Add first few errors to issues
+        errorLogs.slice(0, 3).forEach(log => {
+          issues.push(`Console error: ${log.text}`);
+        });
+      }
+      
+      // Step 8: Create result
+      logger.info('Test execution completed successfully', { testId });
+      
+      return createSuccessResult(
+        {
+          screenshots: screenshotUrl ? [screenshotUrl] : [],
+          console_logs: consoleLogsUrl,
+          issues,
+        }
+      );
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      logger.error('Test execution failed', { testId, error: message });
+      
+      return createErrorResult(message, {
+        screenshots: screenshotUrl ? [screenshotUrl] : [],
+        console_logs: consoleLogsUrl,
+      });
+    }
   }
-
+  
   /**
-   * Cleanup resources.
+   * Create timeout promise.
    * 
-   * Closes browser session and cleans up temporary resources.
+   * Returns a promise that rejects after the maximum execution time.
+   * Used to enforce the 5-minute timeout requirement.
    * 
-   * @returns {Promise<void>}
+   * @param {string} testId - Test run identifier
+   * @returns {Promise<never>} Promise that rejects on timeout
+   * @private
    */
-  async cleanup(): Promise<void> {
-    // Placeholder: Will be implemented in MVP phase
-    logger.debug('Cleanup (placeholder)');
+  private createTimeout(testId: string): Promise<TestResult> {
+    return new Promise((resolve) => {
+      setTimeout(() => {
+        logger.warn('Test execution timed out', {
+          testId,
+          timeout_ms: MAX_EXECUTION_TIME_MS,
+        });
+        
+        resolve(createTimeoutResult());
+      }, MAX_EXECUTION_TIME_MS);
+    });
   }
 }
-

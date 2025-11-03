@@ -33,16 +33,16 @@
 
 ### 2. Screenshot Capture
 
-**Goal**: Capture screenshots from the browser and save them locally (MVP uses local storage, Supabase Storage comes later).
+**Goal**: Capture screenshots from the browser and save them to Supabase Storage.
 
 **Steps**:
 1. Create `src/browser/screenshot-capture.ts` with `captureScreenshot()` function
 2. Implement screenshot capture using Browserbase API
-3. Save screenshot to local `artifacts/` directory with timestamped filename
-4. Return file path for later reference
+3. Upload screenshot to Supabase Storage with timestamped filename
+4. Return public URL for later reference
 5. Handle screenshot failures gracefully (log error, continue execution)
 
-**Deliverable**: Can capture screenshots and save to `artifacts/{testId}/screenshots/` directory
+**Deliverable**: Can capture screenshots and upload to Supabase Storage at path `artifacts/{testId}/screenshots/`
 
 ---
 
@@ -54,10 +54,10 @@
 1. Create `src/browser/console-logger.ts` with `collectConsoleLogs()` function
 2. Set up console log listeners using Browserbase/Stagehand API
 3. Collect logs during browser session (errors, warnings, info)
-4. Save logs to `artifacts/{testId}/logs/console.log` file
-5. Return log entries as array for evaluation phase
+4. Upload logs to Supabase Storage at path `artifacts/{testId}/logs/console.log`
+5. Return log entries as array and storage URL for evaluation phase
 
-**Deliverable**: Console logs are captured and saved to artifacts directory
+**Deliverable**: Console logs are captured and uploaded to Supabase Storage
 
 ---
 
@@ -163,24 +163,26 @@
 - Test with browser API key error → clear error message
 
 ### Task 3: Artifact Organization
-- Screenshots saved to `artifacts/{testId}/screenshots/`
-- Logs saved to `artifacts/{testId}/logs/`
-- Test ID is unique (UUID or timestamp-based)
+- Screenshots uploaded to Supabase Storage at `artifacts/{testId}/screenshots/`
+- Logs uploaded to Supabase Storage at `artifacts/{testId}/logs/`
+- Test ID is unique (UUID-based)
+- Public URLs returned for all uploaded artifacts
 
 ---
 
 ## Deliverables Checklist
 
-- [ ] Browser session can be initialized and closed
-- [ ] Game URL can be loaded in browser
-- [ ] At least 1 screenshot captured per test
-- [ ] Console logs collected and saved
-- [ ] Agent orchestrates basic workflow (initialize → load → capture → close)
-- [ ] JSON results output to stdout in correct format
-- [ ] CLI command executes end-to-end successfully
-- [ ] Basic error handling works (invalid URL, connection failures)
-- [ ] Input validation prevents invalid URLs
-- [ ] Artifacts organized in structured directories
+- [x] Browser session can be initialized and closed
+- [x] Game URL can be loaded in browser
+- [x] At least 1 screenshot captured per test
+- [x] Console logs collected and uploaded to Supabase Storage
+- [x] Agent orchestrates basic workflow (initialize → load → capture → close)
+- [x] JSON results output to stdout in correct format
+- [x] CLI command executes end-to-end successfully
+- [x] Basic error handling works (invalid URL, connection failures)
+- [x] Input validation prevents invalid URLs
+- [x] Artifacts uploaded to Supabase Storage with public URLs
+- [x] Test results saved to database
 
 ---
 
@@ -197,8 +199,7 @@
 **Out of Scope for MVP**:
 - Game interaction (clicking buttons, keyboard input)
 - Multiple screenshots throughout session
-- LLM evaluation (will return dummy playability_score)
-- Database storage of test results (results just output to stdout)
+- LLM evaluation (will return static playability_score = 50)
 - Manifest usage (can retrieve if exists, but won't use it yet)
 - Retry logic
 - Advanced error recovery

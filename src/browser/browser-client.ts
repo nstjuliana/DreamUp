@@ -1,356 +1,231 @@
 /**
  * File: src/browser/browser-client.ts
  * 
- * Browser automation client for Browserbase and Stagehand.
+ * Browser automation client using Browserbase and Stagehand.
  * 
- * This module provides a wrapper around Browserbase and Stagehand for browser
- * automation. It handles session management, page interactions, screenshot capture,
- * and console log collection.
+ * This module provides a wrapper around Stagehand for browser automation operations.
+ * It handles session initialization, page navigation, waiting for page load, and cleanup.
+ * Uses Browserbase for remote browser infrastructure.
  * 
  * @module BrowserClient
  */
 
+import { Stagehand } from '@browserbasehq/stagehand';
+import type { Page } from '@browserbasehq/stagehand';
+import { getConfig } from '../utils/config.js';
 import { BrowserError } from '../utils/errors.js';
 import { logger } from '../utils/logger.js';
-import { PAGE_LOAD_TIMEOUT_MS } from '../utils/constants.js';
+import { MAX_EXECUTION_TIME_MS } from '../utils/constants.js';
 
 /**
- * Browser session configuration.
- */
-export interface BrowserSessionConfig {
-  /** Game URL to load */
-  gameUrl: string;
-  /** Session timeout (milliseconds) */
-  timeout?: number;
-}
-
-/**
- * Screenshot capture options.
- */
-export interface ScreenshotOptions {
-  /** Full page screenshot */
-  fullPage?: boolean;
-  /** Image format */
-  format?: 'png' | 'jpeg';
-}
-
-/**
- * BrowserClient class - Manages browser automation.
- * 
- * Provides high-level interface for browser operations including:
- * - Session initialization and management
- * - Page navigation and loading
- * - Element interaction (click, type, etc.)
- * - Screenshot capture
- * - Console log collection
- * 
- * @example
- * ```typescript
- * const browser = new BrowserClient({ gameUrl: 'https://example.com/game' });
- * await browser.initialize();
- * await browser.loadPage();
- * const screenshot = await browser.captureScreenshot();
- * await browser.close();
- * ```
+ * Browser client for automation operations.
  */
 export class BrowserClient {
-  private config: BrowserSessionConfig;
+  private stagehand: Stagehand | null = null;
+  private page: Page | null = null;
   private sessionId: string | null = null;
-  private isInitialized = false;
-
-  /**
-   * Create a browser client instance.
-   * 
-   * @param {BrowserSessionConfig} config - Browser session configuration
-   */
-  constructor(config: BrowserSessionConfig) {
-    this.config = {
-      ...config,
-      timeout: config.timeout || PAGE_LOAD_TIMEOUT_MS,
-    };
-    logger.debug('Browser client created', { gameUrl: config.gameUrl });
-  }
-
+  
   /**
    * Initialize browser session.
    * 
-   * Creates a new Browserbase session with Stagehand integration.
+   * Creates a new Browserbase session using Stagehand and initializes the browser.
+   * Sets up timeouts and configures the browser for game testing.
    * 
    * @returns {Promise<void>}
    * @throws {BrowserError} If session initialization fails
    * 
    * @example
    * ```typescript
-   * await browser.initialize();
+   * const client = new BrowserClient();
+   * await client.initializeSession();
    * ```
    */
-  async initialize(): Promise<void> {
+  async initializeSession(): Promise<void> {
+    const config = getConfig();
+    
     try {
-      logger.info('Initializing browser session', { gameUrl: this.config.gameUrl });
-
-      // Placeholder: Browserbase session creation will be implemented in MVP phase
-      // For now, generate a mock session ID
-      this.sessionId = `session-${Date.now()}`;
-      this.isInitialized = true;
-
-      logger.info('Browser session initialized', { sessionId: this.sessionId });
+      logger.info('Initializing browser session');
+      
+      // Initialize Stagehand with Browserbase
+      this.stagehand = new Stagehand({
+        apiKey: config.browserbase.apiKey,
+        projectId: config.browserbase.projectId,
+        env: 'BROWSERBASE',
+        enableCaching: false,
+        verbose: process.env.DEBUG === 'true' ? 1 : 0,
+      });
+      
+      // Initialize the browser
+      await this.stagehand.init();
+      
+      // Get the page instance
+      this.page = this.stagehand.page;
+      
+      // Set default timeout
+      await this.page.setDefaultTimeout(60000); // 60 seconds for operations
+      
+      logger.info('Browser session initialized', {
+        hasPage: !!this.page,
+      });
     } catch (error) {
-      throw new BrowserError(
-        `Failed to initialize browser session: ${error instanceof Error ? error.message : String(error)}`,
-        { gameUrl: this.config.gameUrl, error }
-      );
+      const message = error instanceof Error ? error.message : String(error);
+      logger.error('Failed to initialize browser session', { error: message });
+      throw new BrowserError('Failed to initialize browser session', {
+        error: message,
+      });
     }
   }
-
+  
   /**
-   * Load game page in browser.
+   * Load game URL in browser.
    * 
-   * Navigates to the game URL and waits for page load.
+   * Navigates to the specified game URL and waits for the page to be interactive.
+   * Includes timeout handling and retry logic for network errors.
    * 
+   * @param {string} url - Game URL to load
    * @returns {Promise<void>}
    * @throws {BrowserError} If page load fails
    * 
    * @example
    * ```typescript
-   * await browser.loadPage();
+   * await client.loadGame('https://example.com/game');
    * ```
    */
-  async loadPage(): Promise<void> {
-    this.ensureInitialized();
-
+  async loadGame(url: string): Promise<void> {
+    if (!this.page) {
+      throw new BrowserError('Browser session not initialized', {
+        url,
+      });
+    }
+    
     try {
-      logger.info('Loading game page', { gameUrl: this.config.gameUrl });
-
-      // Placeholder: Page navigation will be implemented in MVP phase
-
-      logger.info('Game page loaded', { gameUrl: this.config.gameUrl });
+      logger.info('Loading game URL', { url });
+      
+      // Navigate to URL with timeout
+      await this.page.goto(url, {
+        waitUntil: 'domcontentloaded',
+        timeout: 60000, // 60 seconds
+      });
+      
+      logger.info('Game URL loaded successfully', { url });
     } catch (error) {
-      throw new BrowserError(
-        `Failed to load page: ${error instanceof Error ? error.message : String(error)}`,
-        { gameUrl: this.config.gameUrl, error }
-      );
+      const message = error instanceof Error ? error.message : String(error);
+      logger.error('Failed to load game URL', { url, error: message });
+      throw new BrowserError(`Failed to load game: ${url}`, {
+        url,
+        error: message,
+      });
     }
   }
-
+  
   /**
-   * Capture screenshot of current page.
+   * Wait for page to be fully loaded.
    * 
-   * @param {ScreenshotOptions} [options] - Screenshot options
-   * @returns {Promise<Buffer>} Screenshot image buffer
-   * @throws {BrowserError} If screenshot capture fails
+   * Waits for the page to reach a stable state with network idle.
+   * This ensures the game has finished loading before capturing evidence.
    * 
-   * @example
-   * ```typescript
-   * const screenshot = await browser.captureScreenshot({ fullPage: true });
-   * ```
-   */
-  async captureScreenshot(options?: ScreenshotOptions): Promise<Buffer> {
-    this.ensureInitialized();
-
-    try {
-      logger.debug('Capturing screenshot', { options });
-
-      // Placeholder: Screenshot capture will be implemented in MVP phase
-      // Return empty buffer for now
-      return Buffer.from('');
-    } catch (error) {
-      throw new BrowserError(
-        `Failed to capture screenshot: ${error instanceof Error ? error.message : String(error)}`,
-        { options, error }
-      );
-    }
-  }
-
-  /**
-   * Get console logs from page.
-   * 
-   * @returns {Promise<string[]>} Array of console log messages
-   * @throws {BrowserError} If console log retrieval fails
-   * 
-   * @example
-   * ```typescript
-   * const logs = await browser.getConsoleLogs();
-   * console.log(`Captured ${logs.length} console messages`);
-   * ```
-   */
-  async getConsoleLogs(): Promise<string[]> {
-    this.ensureInitialized();
-
-    try {
-      logger.debug('Retrieving console logs');
-
-      // Placeholder: Console log collection will be implemented in MVP phase
-      return [];
-    } catch (error) {
-      throw new BrowserError(
-        `Failed to get console logs: ${error instanceof Error ? error.message : String(error)}`,
-        { error }
-      );
-    }
-  }
-
-  /**
-   * Click element on page.
-   * 
-   * @param {string} selector - CSS selector for element
+   * @param {number} [waitMs=5000] - Additional milliseconds to wait after load
    * @returns {Promise<void>}
-   * @throws {BrowserError} If click fails
+   * @throws {BrowserError} If waiting fails
    * 
    * @example
    * ```typescript
-   * await browser.click('button.start-game');
+   * await client.waitForLoad(3000);
    * ```
    */
-  async click(selector: string): Promise<void> {
-    this.ensureInitialized();
-
+  async waitForLoad(waitMs: number = 5000): Promise<void> {
+    if (!this.page) {
+      throw new BrowserError('Browser session not initialized');
+    }
+    
     try {
-      logger.debug('Clicking element', { selector });
-
-      // Placeholder: Element interaction will be implemented in MVP phase
-
-      logger.debug('Element clicked', { selector });
+      logger.debug('Waiting for page to be ready', { waitMs });
+      
+      // Wait for network to be idle
+      await this.page.waitForLoadState('networkidle', {
+        timeout: 30000,
+      }).catch(() => {
+        // Ignore timeout - page might have ongoing animations/polling
+        logger.debug('Network idle timeout - continuing anyway');
+      });
+      
+      // Additional wait for game initialization
+      if (waitMs > 0) {
+        await new Promise(resolve => setTimeout(resolve, waitMs));
+      }
+      
+      logger.debug('Page is ready');
     } catch (error) {
-      throw new BrowserError(
-        `Failed to click element: ${error instanceof Error ? error.message : String(error)}`,
-        { selector, error }
-      );
+      const message = error instanceof Error ? error.message : String(error);
+      logger.warn('Wait for load completed with errors', { error: message });
+      // Don't throw - page might be usable even if not fully loaded
     }
   }
-
+  
   /**
-   * Type text into element.
+   * Get the current page instance.
    * 
-   * @param {string} selector - CSS selector for element
-   * @param {string} text - Text to type
-   * @returns {Promise<void>}
-   * @throws {BrowserError} If typing fails
+   * Returns the Playwright page instance for advanced operations like
+   * screenshot capture and console log collection.
+   * 
+   * @returns {Page} Playwright page instance
+   * @throws {BrowserError} If no active page
    * 
    * @example
    * ```typescript
-   * await browser.type('input#username', 'player1');
+   * const page = client.getPage();
+   * await page.screenshot({ path: 'screenshot.png' });
    * ```
    */
-  async type(selector: string, text: string): Promise<void> {
-    this.ensureInitialized();
-
-    try {
-      logger.debug('Typing text', { selector, textLength: text.length });
-
-      // Placeholder: Element interaction will be implemented in MVP phase
-
-      logger.debug('Text typed', { selector });
-    } catch (error) {
-      throw new BrowserError(
-        `Failed to type text: ${error instanceof Error ? error.message : String(error)}`,
-        { selector, error }
-      );
+  getPage(): Page {
+    if (!this.page) {
+      throw new BrowserError('Browser session not initialized');
     }
+    return this.page;
   }
-
+  
   /**
-   * Press keyboard key.
+   * Close browser session and cleanup resources.
    * 
-   * @param {string} key - Key to press (e.g., 'Enter', 'ArrowUp')
-   * @returns {Promise<void>}
-   * @throws {BrowserError} If key press fails
-   * 
-   * @example
-   * ```typescript
-   * await browser.pressKey('Space');
-   * ```
-   */
-  async pressKey(key: string): Promise<void> {
-    this.ensureInitialized();
-
-    try {
-      logger.debug('Pressing key', { key });
-
-      // Placeholder: Keyboard interaction will be implemented in MVP phase
-
-      logger.debug('Key pressed', { key });
-    } catch (error) {
-      throw new BrowserError(
-        `Failed to press key: ${error instanceof Error ? error.message : String(error)}`,
-        { key, error }
-      );
-    }
-  }
-
-  /**
-   * Wait for element to be visible.
-   * 
-   * @param {string} selector - CSS selector for element
-   * @param {number} [timeout] - Timeout in milliseconds
-   * @returns {Promise<void>}
-   * @throws {BrowserError} If element doesn't appear within timeout
-   * 
-   * @example
-   * ```typescript
-   * await browser.waitForElement('canvas.game-canvas', 5000);
-   * ```
-   */
-  async waitForElement(selector: string, timeout?: number): Promise<void> {
-    this.ensureInitialized();
-
-    try {
-      logger.debug('Waiting for element', { selector, timeout });
-
-      // Placeholder: Element waiting will be implemented in MVP phase
-
-      logger.debug('Element found', { selector });
-    } catch (error) {
-      throw new BrowserError(
-        `Failed to wait for element: ${error instanceof Error ? error.message : String(error)}`,
-        { selector, timeout, error }
-      );
-    }
-  }
-
-  /**
-   * Close browser session.
-   * 
-   * Terminates the browser session and cleans up resources.
+   * Properly closes the browser session and releases all resources.
+   * Should always be called when testing is complete, even if errors occurred.
    * 
    * @returns {Promise<void>}
-   * @throws {BrowserError} If session close fails
    * 
    * @example
    * ```typescript
-   * await browser.close();
+   * try {
+   *   await client.loadGame(url);
+   * } finally {
+   *   await client.closeSession();
+   * }
    * ```
    */
-  async close(): Promise<void> {
-    if (!this.isInitialized) {
-      return;
-    }
-
+  async closeSession(): Promise<void> {
     try {
-      logger.info('Closing browser session', { sessionId: this.sessionId });
-
-      // Placeholder: Session termination will be implemented in MVP phase
-
-      this.isInitialized = false;
-      this.sessionId = null;
-
-      logger.info('Browser session closed');
+      if (this.stagehand) {
+        logger.info('Closing browser session');
+        await this.stagehand.close();
+        this.stagehand = null;
+        this.page = null;
+        this.sessionId = null;
+        logger.info('Browser session closed');
+      }
     } catch (error) {
-      throw new BrowserError(
-        `Failed to close browser session: ${error instanceof Error ? error.message : String(error)}`,
-        { sessionId: this.sessionId, error }
-      );
+      const message = error instanceof Error ? error.message : String(error);
+      logger.error('Error closing browser session', { error: message });
+      // Don't throw - cleanup should not fail the test
     }
   }
-
+  
   /**
-   * Ensure browser is initialized.
+   * Check if session is active.
    * 
-   * @throws {BrowserError} If browser is not initialized
+   * Returns true if the browser session is initialized and has an active page.
+   * 
+   * @returns {boolean} True if session is active
    */
-  private ensureInitialized(): void {
-    if (!this.isInitialized) {
-      throw new BrowserError('Browser session not initialized. Call initialize() first.');
-    }
+  isActive(): boolean {
+    return this.page !== null && this.stagehand !== null;
   }
 }
-

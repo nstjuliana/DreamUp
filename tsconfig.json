@@ -3,7 +3,7 @@
     "target": "ES2022",
     "module": "ESNext",
     "lib": ["ES2022"],
-    "moduleResolution": "bundler",
+    "moduleResolution": "node",
     "strict": true,
     "esModuleInterop": true,
     "skipLibCheck": true,
@@ -19,7 +19,7 @@
     "outDir": "./dist",
     "rootDir": ".",
     "baseUrl": ".",
-    "types": ["bun"],
+    "types": ["node"],
     "jsx": "react-jsx"
   },
   "include": ["src/**/*", "qa.ts", "lambda.ts"],

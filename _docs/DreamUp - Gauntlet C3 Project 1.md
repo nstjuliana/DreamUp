@@ -57,7 +57,7 @@ Build an AI agent that autonomously tests browser games by simulating user inter
 4. **Execution Interface**  
      
    - Our game dev agent runs in a lambda function and we would like to invoke the QA from this environment  
-   - Typescript file is preferred (i.e. executed with `bun run qa.ts`, `npx tsx qa.ts`, etc.)  
+   - Typescript file is preferred (i.e. executed with `npx tsx qa.ts --url <game-url>`, `npm start -- --url <game-url>`, etc.)  
    - Running with a CLI command is acceptable too: `qa-agent <game-url>`  
    - Structured output: `{status, playability_score, issues[], screenshots[], timestamp}` 
 

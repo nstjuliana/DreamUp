@@ -1,4 +1,4 @@
-#!/usr/bin/env bun
+#!/usr/bin/env node
 
 /**
  * File: qa.ts
@@ -9,8 +9,9 @@
  * It initializes the application, loads configuration, and delegates to the CLI module.
  * 
  * Usage:
- *   bun run qa.ts <game-url> [options]
- *   bun run qa.ts --help
+ *   npm start -- --url <game-url> [options]
+ *   npm start -- --help
+ *   tsx qa.ts --url <game-url> [options]
  * 
  * @module QA
  */

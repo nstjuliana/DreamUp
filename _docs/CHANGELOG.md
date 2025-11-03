@@ -67,7 +67,7 @@ This update introduces Games and Manifests as first-class entities in the archit
   - Reordered features by priority
 
 - Updated **Technical Architecture → Stack** section:
-  - Added Runtime (Bun)
+  - Added Runtime (Node.js)
   - Added Database (Supabase for games, manifests, test results)
   - Added File Storage (Supabase Storage)
   - Added CLI Framework (Commander.js)
