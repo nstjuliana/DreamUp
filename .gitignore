@@ -1,1 +1,41 @@
+# Environment variables
 .env
+.env.local
+
+# Dependencies
+node_modules/
+
+# Bun
+.bun/
+bun.lockb
+
+# Build outputs
+dist/
+*.js
+*.js.map
+
+# Artifacts (local storage fallback)
+artifacts/*
+!artifacts/.gitkeep
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+logs/
+
+# Temporary files
+tmp/
+temp/
+
+*.md
+!_docs/*

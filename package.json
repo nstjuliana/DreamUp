@@ -1,0 +1,36 @@
+{
+  "name": "dreamup-qa",
+  "version": "1.0.0",
+  "description": "AI-powered browser game QA testing pipeline",
+  "main": "qa.ts",
+  "type": "module",
+  "scripts": {
+    "start": "bun run qa.ts",
+    "dev": "bun run --watch qa.ts",
+    "type-check": "tsc --noEmit"
+  },
+  "keywords": [
+    "qa",
+    "testing",
+    "browser-automation",
+    "ai",
+    "game-testing"
+  ],
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "@supabase/supabase-js": "^2.39.0",
+    "commander": "^11.1.0",
+    "ai": "^3.0.0"
+  },
+  "devDependencies": {
+    "@types/bun": "^1.0.0",
+    "@types/node": "^20.10.5",
+    "supabase": "^1.142.2",
+    "typescript": "^5.3.3"
+  },
+  "engines": {
+    "bun": ">=1.0.0"
+  }
+}
+
