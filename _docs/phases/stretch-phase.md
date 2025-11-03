@@ -13,38 +13,87 @@
 
 ## Features
 
-### 1. Batch Testing
+### 1. Web Dashboard UI (Next.js)
 
-**Goal**: Enable testing multiple game URLs in sequence with aggregated reporting.
+**Goal**: Create a web UI for game management, manifest creation, and test execution.
+
+**Priority**: High - Core value for stretch phase
 
 **Steps**:
-1. Update CLI to accept multiple URLs or a file with URLs
+1. Set up Next.js project (App Router)
+2. Create pages:
+   - Games Library page (list all games)
+   - Create Game page with embedded manifest generator
+   - Game Detail page (game info, manifest versions, test history)
+   - Edit/Add Manifest page
+   - Run Test page
+   - Test Results page
+3. Integrate with Supabase database (read/write games, manifests, test runs)
+4. Implement API routes for test submission
+5. Style with Tailwind CSS + shadcn/ui components
+
+**Sub-Feature: Embedded Manifest Generator**
+
+**Goal**: Visual interface for creating/editing game manifests without manual JSON editing.
+
+**Components** (see detailed spec in user-flow.md Journey 3.2):
+1. **Controls Definition Interface**
+   - Visual keyboard picker (click keys to select)
+   - Primary/secondary controls lists
+   - Mouse interaction toggles
+   - Preset buttons for common control schemes
+
+2. **Start Button Configuration**
+   - CSS selector input
+   - Button text input
+   - Position selector
+   - Wait time configuration
+
+3. **Game States Builder**
+   - Add/remove/reorder game states
+   - For each state:
+     - Name input
+     - Expected elements builder
+     - Required actions builder
+     - Optional screenshot upload
+   - Drag-to-reorder functionality
+
+4. **Live JSON Preview**
+   - Side/bottom panel
+   - Syntax-highlighted display
+   - Real-time updates
+   - Copy to clipboard
+   - Validates against game-manifest-schema.md
+
+5. **Manifest Versioning UI**
+   - List all manifest versions for a game
+   - Create new version (with clone option)
+   - Set active manifest
+   - View/edit/delete versions
+   - Version notes and change tracking
+
+**Deliverable**: 
+- Full web UI for games, manifests, and testing
+- Embedded manifest generator eliminates need for manual JSON editing
+- Manifest versioning support
+
+---
+
+### 2. Batch Testing
+
+**Goal**: Enable testing multiple games in sequence with aggregated reporting.
+
+**Steps**:
+1. Update CLI to accept multiple URLs or CSV file with game IDs
 2. Create `src/agent/batch-runner.ts` with batch execution logic
 3. Implement sequential execution of multiple tests
 4. Aggregate results: total tests, passed, failed, average playability score
 5. Output aggregated report (JSON or formatted text)
-6. Store batch results in database (link individual tests to batch)
+6. Store batch results in database with batch_id linking tests
 7. Handle partial failures gracefully (continue with remaining tests)
+8. Add batch view to web UI (if built)
 
 **Deliverable**: Can test multiple games in one command with aggregated results
-
----
-
-### 2. Web Dashboard UI (Next.js)
-
-**Goal**: Create a web UI for submitting tests and viewing results.
-
-**Steps**:
-1. Set up Next.js project structure (if separate repo/folder)
-2. Create dashboard page showing test history
-3. Create test submission form (URL input, optional manifest upload)
-4. Create test results detail page (screenshots gallery, logs, evaluation)
-5. Integrate with existing database/storage (read from Supabase)
-6. Implement API routes for test submission (calls agent)
-7. Add filtering and search capabilities
-8. Style with modern UI framework (Tailwind, shadcn/ui if desired)
-
-**Deliverable**: Web UI allows submitting tests and viewing results visually
 
 ---
 
@@ -148,10 +197,10 @@
 ### Priority Order
 
 If implementing stretch features, recommended order:
-1. **Batch Testing** - Most useful for QA workflows
-2. **Settings/Configuration** - Improves usability
-3. **Test Result Export** - Useful for reporting
-4. **Web Dashboard UI** - Significant time investment, high value
+1. **Web Dashboard UI with Manifest Generator** - Highest value, enables easy game/manifest management
+2. **Batch Testing** - Most useful for QA workflows
+3. **Settings/Configuration** - Improves usability
+4. **Test Result Export** - Useful for reporting
 5. **Advanced Metrics** - Nice to have
 6. **GIF Recording** - Nice to have
 7. **LLM Model Comparison** - Experimental/analysis feature

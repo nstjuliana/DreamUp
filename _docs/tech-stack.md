@@ -62,12 +62,22 @@ This document outlines the complete technology stack for the DreamUp QA Pipeline
 - REST API auto-generated from database schema
 - Real-time subscriptions available if needed
 
+**Database Schema:**
+
+The application uses three main tables:
+- **`games`**: Central repository of browser games (URL, name, type, active manifest)
+- **`game_manifests`**: Version-controlled manifests for each game (1-to-many with games)
+- **`test_runs`**: Historical record of all test executions (linked to game + manifest)
+
+See `_docs/database-schema.md` for complete schema definition, relationships, indexes, and TypeScript types.
+
 **Best Practices:**
 - Use Supabase TypeScript client for all database operations
-- Create database types from schema using `supabase gen types typescript`
-- Use Row Level Security (RLS) policies for data access control
+- Generate database types from schema using `supabase gen types typescript` → `src/storage/types.ts`
+- Use Row Level Security (RLS) policies for data access control (currently public for MVP)
 - Implement connection pooling for Lambda functions
 - Use migrations via Supabase CLI for schema changes
+- Store large artifacts (screenshots, logs) in Supabase Storage, not database
 
 **Limitations:**
 - Vendor lock-in (data tied to Supabase platform)

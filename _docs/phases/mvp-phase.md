@@ -96,18 +96,25 @@
 
 ---
 
-### 6. CLI Integration
+### 6. CLI Integration with Game Lookup
 
-**Goal**: Connect CLI commands to agent execution.
+**Goal**: Connect CLI commands to agent execution with database game lookup.
 
 **Steps**:
-1. Update `src/cli/commands.ts` to call `QAAgent.run()` with parsed URL
-2. Validate URL format before passing to agent
-3. Handle agent execution errors and display user-friendly messages
-4. Output JSON result to console
-5. Return appropriate exit codes (0 for success, 1 for errors)
+1. Update `src/cli/commands.ts` to:
+   - Parse game URL from command arguments
+   - Look up game in database by URL
+   - If game not found, show error: "Game not found. Create it at [web UI link]"
+   - If game found, retrieve game record (manifest can be null for MVP)
+2. Call `QAAgent.run()` with game data
+3. Validate URL format before database lookup
+4. Handle agent execution errors and display user-friendly messages
+5. Output JSON result to console
+6. Return appropriate exit codes (0 for success, 1 for errors)
 
-**Deliverable**: CLI command `bun run qa.ts <game-url>` executes agent and outputs JSON results
+**Note for MVP**: Games/manifests will be created manually in database for testing. Web UI for game creation comes in Stretch Phase.
+
+**Deliverable**: CLI command `bun run qa.ts <game-url>` looks up game and executes agent
 
 ---
 
@@ -183,6 +190,7 @@
 - Basic browser navigation (load URL, wait for load)
 - Single screenshot capture
 - Console log collection
+- Game lookup from database by URL
 - JSON output to stdout
 - Basic error handling
 
@@ -190,9 +198,11 @@
 - Game interaction (clicking buttons, keyboard input)
 - Multiple screenshots throughout session
 - LLM evaluation (will return dummy playability_score)
-- Database storage
+- Database storage of test results (results just output to stdout)
+- Manifest usage (can retrieve if exists, but won't use it yet)
 - Retry logic
 - Advanced error recovery
+- Web UI for game creation (games created manually in DB for testing)
 
 ---
 

@@ -72,7 +72,27 @@
 
 ---
 
-### 5. Core Module Placeholders
+### 5. Database Schema Setup
+
+**Goal**: Create database schema in Supabase for games, manifests, and test runs.
+
+**Steps**:
+1. Reference `_docs/database-schema.md` for complete schema definition
+2. Create Supabase project (if not already created)
+3. Run SQL migrations to create tables:
+   - `games` table (id, game_url, name, game_type, description, active_manifest_id, timestamps)
+   - `game_manifests` table (id, game_id, version_name, manifest_data, is_active, created_at, notes)
+   - `test_runs` table (id, game_id, manifest_id, status, playability_score, issues, screenshots, console_logs, execution_method, duration_ms, created_at, metadata)
+4. Create indexes for efficient querying
+5. Create foreign key constraints
+6. Create triggers (update_updated_at, update_last_tested, ensure_one_active_manifest)
+7. Generate TypeScript types: `supabase gen types typescript > src/storage/types.ts`
+
+**Deliverable**: Database schema created, types generated, Supabase ready for use
+
+---
+
+### 6. Core Module Placeholders
 
 **Goal**: Create placeholder files in each module with proper file headers and basic exports.
 
@@ -81,15 +101,16 @@
 2. Create `src/browser/browser-client.ts` with empty `BrowserClient` class
 3. Create `src/evaluation/llm-evaluator.ts` with empty `LLMEvaluator` class
 4. Create `src/storage/database.ts` and `src/storage/file-storage.ts` with placeholder functions
-5. Create `src/utils/errors.ts` with base `QAAgentError` class
-6. Create `src/utils/constants.ts` with application constants (MAX_EXECUTION_TIME_MS, MAX_RETRY_ATTEMPTS, etc.)
-7. Create `src/utils/logger.ts` with basic logging utility
+5. Create `src/storage/types.ts` (will be populated with generated types from step 5)
+6. Create `src/utils/errors.ts` with base `QAAgentError` class
+7. Create `src/utils/constants.ts` with application constants (MAX_EXECUTION_TIME_MS, MAX_RETRY_ATTEMPTS, etc.)
+8. Create `src/utils/logger.ts` with basic logging utility
 
 **Deliverable**: All core modules exist with proper file headers and TypeScript exports
 
 ---
 
-### 6. Error Handling Foundation
+### 7. Error Handling Foundation
 
 **Goal**: Establish custom error classes for different error scenarios.
 
@@ -103,7 +124,7 @@
 
 ---
 
-### 7. Constants and Configuration
+### 8. Constants and Configuration
 
 **Goal**: Define all application constants in a centralized location.
 
@@ -142,12 +163,14 @@
 - [ ] TypeScript compiles with strict mode
 - [ ] Bun can execute `qa.ts` entry point
 - [ ] CLI accepts arguments and displays help
+- [ ] Database schema created in Supabase
+- [ ] Database types generated and imported
 - [ ] All core modules exist with proper file headers
 - [ ] Environment variables can be loaded and validated
 - [ ] Custom error classes are defined
 - [ ] Constants are centralized
 - [ ] `.gitignore` properly configured
-- [ ] `.env.example` documents all required variables
+- [ ] `.env.example` documents all required variables (including Supabase credentials)
 
 ---
 

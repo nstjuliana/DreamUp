@@ -31,16 +31,42 @@ All execution paths share the same core QA agent logic and store results in a da
 
 **Entry Point:**
 - QA engineer has a game URL to test
-- Optional: Has `game-manifest.json` file with game type and key controls
+- Game must exist in database (created via Web UI)
 
 **Execution Steps:**
 
 1. **Command Execution**
-   - User runs one of:
-     - `bun run qa.ts <game-url>`
-     - `npx tsx qa.ts <game-url>`
-     - `qa-agent <game-url>`
-   - Optional: Include `--manifest <path-to-game-manifest.json>`
+   - User runs: `bun run qa.ts <game-url>`
+   - Optional flags:
+     - `--manifest <version-name>`: Use specific manifest version
+     - `--no-manifest`: Skip manifest usage
+     - `--create-game`: Error out with helpful message (games must be created via Web UI)
+
+1a. **Game Lookup**
+   - System looks up game by URL in database
+   - If game not found:
+     - Error: "Game not found. Create it at [web UI link]"
+     - Exit with error code 1
+   - If game found: Proceed to step 1b
+
+1b. **Manifest Selection** (if game has manifests)
+   - If `--manifest` flag provided:
+     - Use specified manifest version
+     - If version not found, error: "Manifest version 'x' not found"
+   - If `--no-manifest` flag provided:
+     - Skip manifest, proceed to agent execution
+   - If no flags provided:
+     - Check if game has any manifests:
+       - **No manifests**: Proceed without manifest (warn user)
+       - **Has manifests**: Prompt user:
+         ```
+         Select manifest version:
+         [1] v1.0 (active) - Initial manifest
+         [2] v2.0 - Updated controls
+         [3] None (run without manifest)
+         Enter selection [1]:
+         ```
+     - Wait for user input, default to active manifest (option 1)
 
 2. **Agent Initialization**
    - System loads game URL in headless browser (Browserbase/Stagehand)
@@ -135,120 +161,348 @@ All execution paths share the same core QA agent logic and store results in a da
 
 ### Journey 3: Web UI Journey (MVP)
 
-#### 3.1 Landing/Dashboard View
+#### 3.1 Landing/Games Library View
 
 **Entry Point:**
 - User navigates to `localhost` (or deployed URL)
 
 **View Components:**
-- Test history list showing all past test runs
-- Each entry displays:
-  - Game URL (truncated with tooltip for full URL)
-  - Test status (Pass/Fail/In Progress)
-  - Playability score
-  - Timestamp
-  - Duration
+- **Games Library**: Grid or table of all games
+- Each game card/row displays:
+  - Game name
+  - Game URL (truncated with tooltip)
+  - Game type badge (puzzle, platformer, etc.)
+  - Has manifest indicator (✓ badge if manifest exists)
+  - Last tested date
+  - Latest playability score
+  - Number of tests run
 
 **Interactions:**
-- Click on any test result to view details (see Journey 3.3)
-- Filter tests by:
-  - Status (Pass/Fail/All)
-  - Date range
-  - Playability score threshold
-- Search by game URL
-- Sort by timestamp (newest/oldest first) or playability score
+- Click on any game → View Game Detail Page (Journey 3.4)
+- Filter games by:
+  - Game type (puzzle, platformer, idle, etc.)
+  - Has/no manifest
+  - Last tested date range
+- Search by game name or URL
+- Sort by: name, last tested, playability score
 
 **Navigation:**
-- "New Test" button/link to submit test flow
+- "Create New Game" button → Create Game Page (Journey 3.2)
+- "Run Test" button on each card → Run Test Page with game pre-selected (Journey 3.5)
 
 ---
 
-#### 3.2 Submit Test Flow
+#### 3.2 Create Game Page
 
 **Entry Point:**
-- User clicks "New Test" from dashboard or navigates to `/test/new`
+- User clicks "Create New Game" from Games Library
 
-**Form Steps:**
+**Page Structure:**
 
+**Section 1: Basic Game Information**
 1. **Game URL Input**
    - Text input field for game URL
-   - Validation: Must be valid URL format
-   - Optional: Preview/test URL accessibility
+   - Validation: Must be valid URL format, must be unique
+   - Real-time check: Does this game already exist?
 
-2. **Manifest Upload (Optional)**
-   - File upload input for `game-manifest.json`
-   - Drag-and-drop support
-   - Validation: Must be valid JSON format
-   - Display parsed game type and controls preview if valid
+2. **Game Name Input**
+   - Text input field for game name (required)
+   - Example: "Space Shooter Pro", "Puzzle Quest"
 
-3. **Submit Action**
-   - User clicks "Run Test" button
-   - Form validation confirms URL is provided
+3. **Game Type Selection**
+   - Dropdown: Puzzle, Platformer, Idle, Shooter, RPG, Other
+   - If "Other" selected, show additional text input for description
 
-4. **Execution Trigger**
-   - System triggers same QA agent execution (API call or direct invocation)
-   - Same process flow as CLI journey (Initialize → Observe → Interact → Monitor → Evaluate → Report)
+4. **Description (Optional)**
+   - Text area for game description
+   - Markdown support
 
-5. **Progress Display**
-   - Show loading/progress state:
-     - "Initializing browser..."
-     - "Loading game..."
-     - "Interacting with game..."
-     - "Evaluating results..."
-   - Optional: Real-time status updates via WebSocket or polling
+**Section 2: Embedded Manifest Generator (Optional)**
+- Section header: "Create Game Manifest (Optional - can add later)"
+- Collapsible/expandable section
 
-6. **Result Display**
-   - Once complete, automatically redirect to results view
-   - New test entry appears in dashboard
+**Manifest Generator Components:**
+
+1. **Controls Definition**
+   - Visual keyboard picker (click keys to select)
+   - Primary controls list (with remove buttons)
+   - Secondary controls list (optional)
+   - Mouse interaction toggle
+   - Mouse actions checkboxes (click, drag, scroll)
+   - Preset buttons: "WASD + Space", "Arrow Keys + Space", "Mouse Only"
+
+2. **Start Button Configuration**
+   - CSS Selector input (advanced)
+   - Button text input
+   - Position dropdown (center/top/bottom/left/right)
+   - Wait after click input (milliseconds)
+
+3. **Game States Builder**
+   - "Add Game State" button
+   - List of game states (drag to reorder)
+   - Each state has:
+     - State name input
+     - Expected elements section (add/remove)
+     - Required actions section (add/remove)
+     - Optional screenshot upload
+   - Visual state flow diagram
+
+4. **Additional Settings**
+   - Loading duration input (milliseconds)
+   - Notes/Special instructions (text area)
+
+5. **Live JSON Preview**
+   - Side panel or bottom panel
+   - Syntax-highlighted JSON display
+   - Updates in real-time as user fills form
+   - Copy to clipboard button
+
+**Save Actions:**
+- "Save Without Manifest" button
+  - Creates game record with no manifest
+  - Redirect to Game Detail Page
+
+- "Save With Manifest" button
+  - Creates game record
+  - Creates initial manifest version (v1.0)
+  - Sets manifest as active
+  - Redirect to Game Detail Page
+
+- "Cancel" button → Return to Games Library
 
 **Error Handling:**
-- If URL is invalid, show validation error
-- If test fails to start, show error message
-- If test times out, show timeout error and partial results if available
+- If game URL already exists, show error with link to existing game
+- Validate required fields before save
+- Validate JSON schema before creating manifest
+- Show inline validation errors
+
+**Exit Point:**
+- Game created, redirect to Game Detail Page (Journey 3.4)
 
 ---
 
-#### 3.3 View Results Flow
+#### 3.3 Edit/Add Manifest Version
 
 **Entry Point:**
-- User clicks on test result from dashboard
-- Or navigates directly to `/test/:id`
+- From Game Detail Page, click "Create New Manifest Version"
+- Or click "Edit" on existing manifest
+
+**Page Structure:**
+
+Similar to embedded manifest generator from Create Game Page (Journey 3.2), but:
+
+**Additional Fields:**
+1. **Version Name Input**
+   - Text input (required)
+   - Examples: "v2.0", "After Dec Update", "Tutorial Skip Version"
+   - Auto-suggest: Increment from latest version
+
+2. **Clone From Previous Version**
+   - Dropdown to select existing manifest as starting point
+   - Pre-populates form with selected manifest data
+
+3. **Version Notes**
+   - Text area (required)
+   - Describe what changed: "Updated controls after game patch", "Added tutorial screen handling"
+
+**Manifest Generator:**
+- Same components as Create Game Page
+- All fields editable
+
+**Save Actions:**
+- "Save Manifest Version" button
+  - Creates new manifest version
+  - Does NOT set as active by default
+  - Redirect to Game Detail Page
+
+- "Save and Set as Active" button
+  - Creates new manifest version
+  - Sets it as active (deactivates previous active)
+  - Redirect to Game Detail Page
+
+- "Cancel" button → Return to Game Detail Page
+
+**Exit Point:**
+- New manifest version created, visible in Game Detail Page
+
+---
+
+#### 3.4 Game Detail Page
+
+**Entry Point:**
+- User clicks on game from Games Library
+
+**Page Structure:**
+
+**Section 1: Game Information**
+- Game name (editable inline)
+- Game URL (clickable link to open game)
+- Game type badge
+- Description
+- Edit button → Edit game info
+
+**Section 2: Manifest Versions**
+- List of all manifest versions for this game
+- Each version displays:
+  - Version name
+  - Created date
+  - Creator (if tracked)
+  - "Active" badge (if currently active)
+  - Notes preview (expandable)
+  - Actions: View JSON, Set as Active, Edit, Delete
+
+- "Create New Manifest Version" button → Journey 3.3
+- If no manifests: "No manifests yet. Create the first one!"
+
+**Section 3: Test History**
+- List of all test runs for this game (most recent first)
+- Each test run displays:
+  - Status badge (Pass/Fail/Error/Timeout)
+  - Playability score
+  - Manifest version used (or "No manifest")
+  - Execution method (CLI/Lambda/Web)
+  - Date/time
+  - Duration
+- Click on test run → View Test Results Page (Journey 3.6)
+- "View All Tests" button if many tests
+
+**Section 4: Quick Actions**
+- "Run New Test" button → Run Test Page with game pre-selected (Journey 3.5)
+- "Edit Game" button → Edit game info modal
+- "Delete Game" button → Confirmation modal (cascades to manifests and tests)
+
+**Navigation:**
+- Back button to Games Library
+- Breadcrumb: Games > [Game Name]
+
+---
+
+#### 3.5 Run Test Page
+
+**Entry Point:**
+- Click "Run Test" from Games Library
+- Click "Run New Test" from Game Detail Page
+
+**Page Structure:**
+
+**Form:**
+
+1. **Game Selection**
+   - Dropdown showing all games
+   - Displays: game name, URL preview, last tested date
+   - If coming from Game Detail Page: pre-selected and disabled
+   - Search/filter games
+
+2. **Manifest Version Selection**
+   - Dropdown showing all manifest versions for selected game
+   - Default: Active manifest (indicated with badge)
+   - Option: "No manifest" (test without manifest)
+   - Shows preview of selected manifest settings (controls, game type)
+
+3. **Advanced Options** (collapsible)
+   - Override execution timeout
+   - Override screenshot count
+   - Custom notes for this test run
+
+4. **Run Test Button**
+   - Validates: game selected
+   - Triggers test execution
+
+**Progress Display:**
+- Real-time progress indicators:
+  - "Initializing browser..."
+  - "Loading game..."
+  - "Interacting with game..."
+  - "Evaluating results..."
+- Progress bar (if phases can be tracked)
+- Estimated time remaining
+- Cancel button (attempt to stop test)
+
+**Completion:**
+- Auto-redirect to Test Results Page (Journey 3.6)
+- Success message with link to results
+
+**Error Handling:**
+- If test fails to start: Show error message with details
+- If test times out: Show timeout message with partial results link
+- Validation errors: Inline field-level errors
+
+**Exit Point:**
+- Test run completed, redirect to Test Results Page
+
+---
+
+#### 3.6 View Test Results Page
+
+**Entry Point:**
+- After completing test run (Journey 3.5)
+- Click on test result from Game Detail Page
+- Or navigate directly to `/tests/:testId`
 
 **View Components:**
 
-1. **Summary Section**
-   - Test metadata:
-     - Game URL (clickable link)
+1. **Header Section**
+   - Game name (clickable link to Game Detail Page)
+   - Test ID
+   - Timestamp
+   - Duration
+
+2. **Summary Section**
+   - Overall status badge (Pass/Fail/Error/Timeout)
+   - Playability score (large, visual indicator: 0-100 scale)
+   - Manifest version used (link to manifest details)
+   - Execution method badge (CLI/Lambda/Web)
+
+3. **Evaluation Results**
+   - Structured display of AI evaluation:
+     - Game loaded successfully? (Yes/No with confidence)
+     - Controls responsive? (Yes/No with confidence)
+     - Completed without crashes? (Yes/No with confidence)
+   - Issues array:
+     - List of detected problems
+     - Each issue with severity indicator
+     - Console errors highlighted
+
+4. **Screenshots Gallery**
+   - 3-5 timestamped screenshots
+   - Thumbnail grid view
+   - Click to expand in lightbox/modal
+   - Each screenshot labeled with:
      - Timestamp
-     - Duration
-     - Test ID
-   - Overall status badge (Pass/Fail)
-   - Playability score (visual indicator)
+     - Phase (Initial Load, After Start, During Gameplay, etc.)
+   - Download individual screenshot button
+   - Navigation arrows in lightbox
 
-2. **Evaluation Results**
-   - Display structured JSON results:
-     - Status
-     - Playability score (0-100 or similar scale)
-     - Issues array (list of detected problems)
-     - Confidence scores for each assessment
+5. **Console Logs**
+   - Expandable/collapsible section
+   - Syntax-highlighted logs
+   - Filter by level: All, Error, Warning, Info
+   - Search within logs
+   - Download logs button
+   - Copy to clipboard button
 
-3. **Screenshots Gallery**
-   - Display 3-5 timestamped screenshots
-   - Thumbnail grid view with click-to-expand
-   - Each screenshot labeled with timestamp
-   - Lightbox/modal for full-size viewing
+6. **Test Metadata** (collapsible)
+   - Browser version
+   - LLM model used
+   - Retry count
+   - User agent
+   - Any custom notes from test submission
 
-4. **Console Logs**
-   - Expandable section showing console logs captured during test
-   - Filterable by log level (error, warn, info)
-   - Syntax highlighting for readability
+7. **Artifacts Download**
+   - "Download All Artifacts" button → ZIP file with:
+     - All screenshots
+     - Console logs
+     - JSON report
+     - Manifest used (if applicable)
 
-5. **Artifacts Download**
-   - Download button to get all artifacts (screenshots, logs, JSON report) as zip
+**Actions:**
+- "Run Test Again" button → Run Test Page with same game/manifest
+- "Run with Different Manifest" button → Run Test Page with manifest dropdown open
+- "Back to Game" button → Game Detail Page
+- "Back to Games Library" button → Games Library
 
 **Navigation:**
-- Back button to return to dashboard
-- "Run New Test" button to start another test
+- Breadcrumb: Games > [Game Name] > Test Results
 
 ---
 
@@ -464,36 +718,67 @@ Throughout all journeys, the system handles:
 ## Navigation Map
 
 ```
-┌─────────────────────────────────────────────────┐
-│                  Web UI                          │
-├─────────────────────────────────────────────────┤
-│                                                 │
-│  Dashboard (Journey 3.1)                        │
-│    ├─→ View Results (Journey 3.3)               │
-│    └─→ New Test (Journey 3.2)                   │
-│                                                 │
-│  Batch Test (Journey 4.1) [Stretch]             │
-│    ├─→ View Individual Results (Journey 3.3)    │
-│    └─→ Return to Dashboard                      │
-│                                                 │
-│  Settings (Journey 4.2) [Stretch]               │
-│    └─→ Return to Dashboard                      │
-│                                                 │
-└─────────────────────────────────────────────────┘
+┌─────────────────────────────────────────────────────────┐
+│                       Web UI                             │
+├─────────────────────────────────────────────────────────┤
+│                                                         │
+│  Games Library (Journey 3.1)                            │
+│    ├─→ Create Game (Journey 3.2)                        │
+│    │     └─→ Game Detail (Journey 3.4)                  │
+│    ├─→ Game Detail (Journey 3.4)                        │
+│    │     ├─→ Edit/Add Manifest (Journey 3.3)            │
+│    │     ├─→ View Test Results (Journey 3.6)            │
+│    │     └─→ Run Test (Journey 3.5)                     │
+│    └─→ Run Test (Journey 3.5)                           │
+│          └─→ View Test Results (Journey 3.6)            │
+│                                                         │
+│  Batch Test (Journey 4.1) [Stretch]                     │
+│    ├─→ View Individual Results (Journey 3.6)            │
+│    └─→ Return to Games Library                          │
+│                                                         │
+│  Settings (Journey 4.2) [Stretch]                       │
+│    └─→ Return to Games Library                          │
+│                                                         │
+└─────────────────────────────────────────────────────────┘
 
-┌─────────────────────────────────────────────────┐
-│              Execution Methods                   │
-├─────────────────────────────────────────────────┤
-│                                                 │
-│  CLI (Journey 1)                                │
-│    └─→ Results stored → Visible in Web UI      │
-│                                                 │
-│  Lambda (Journey 2)                             │
-│    └─→ Results stored → Visible in Web UI      │
-│                                                 │
-│  Web UI Submit (Journey 3.2)                    │
-│    └─→ Results stored → Visible in Dashboard   │
-│                                                 │
-└─────────────────────────────────────────────────┘
+┌─────────────────────────────────────────────────────────┐
+│                  Execution Methods                       │
+├─────────────────────────────────────────────────────────┤
+│                                                         │
+│  CLI (Journey 1)                                        │
+│    └─→ Looks up existing game → Uses active manifest   │
+│        └─→ Results stored → Visible in Web UI          │
+│                                                         │
+│  Lambda (Journey 2)                                     │
+│    └─→ Receives gameId + manifestId                    │
+│        └─→ Results stored → Visible in Web UI          │
+│                                                         │
+│  Web UI Run Test (Journey 3.5)                          │
+│    └─→ Select game + manifest → Run test               │
+│        └─→ Results displayed in Test Results Page      │
+│                                                         │
+└─────────────────────────────────────────────────────────┘
+
+┌─────────────────────────────────────────────────────────┐
+│                    Data Flow                             │
+├─────────────────────────────────────────────────────────┤
+│                                                         │
+│  1. Create Game (Web UI only)                           │
+│     ├─→ Game record in database                         │
+│     └─→ Optional: Initial manifest (v1.0)               │
+│                                                         │
+│  2. Add/Edit Manifest (Web UI)                          │
+│     └─→ New manifest version linked to game             │
+│                                                         │
+│  3. Run Test (CLI/Lambda/Web)                           │
+│     ├─→ Lookup game                                     │
+│     ├─→ Get manifest (active or specified)              │
+│     ├─→ Execute QA agent                                │
+│     └─→ Store test results linked to game + manifest    │
+│                                                         │
+│  4. View Results (Web UI)                               │
+│     └─→ Display test results with game/manifest context │
+│                                                         │
+└─────────────────────────────────────────────────────────┘
 ```
 

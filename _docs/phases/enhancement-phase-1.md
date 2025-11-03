@@ -16,20 +16,24 @@
 
 ## Features
 
-### 1. Game Interaction System
+### 1. Game Interaction System with Manifest Support
 
-**Goal**: Enable agent to find and interact with game UI elements (buttons, menus).
+**Goal**: Enable agent to find and interact with game UI elements using manifest data (if available).
 
 **Steps**:
 1. Create `src/browser/ui-pattern-detector.ts` with UI detection functions
-2. Implement `findStartButton()` using Stagehand's AI capabilities to locate play/start buttons
+2. Implement `findStartButton()` that:
+   - First checks manifest for start button configuration (selector, text, position)
+   - Falls back to Stagehand's AI detection if no manifest or manifest fails
 3. Implement `clickElement()` helper function
 4. Create `src/browser/stagehand-handler.ts` with Stagehand integration
 5. Implement basic interaction sequence: detect start button → click it
 6. Add keyboard input support (arrow keys, spacebar) for gameplay simulation
-7. Implement simple gameplay loop: detect game state → perform actions → wait
+7. Use manifest controls data (if available) to guide which keys to press
+8. Implement simple gameplay loop: detect game state → perform actions → wait
+9. Create `src/utils/manifest-parser.ts` to parse and validate manifest data
 
-**Deliverable**: Agent can find and click start buttons, simulate basic keyboard gameplay
+**Deliverable**: Agent can use manifest data to improve interaction accuracy, with fallback to AI detection
 
 ---
 
@@ -50,20 +54,23 @@
 
 ---
 
-### 3. Supabase Database Integration
+### 3. Supabase Database Integration for Test Results
 
-**Goal**: Store test results in Supabase PostgreSQL database.
+**Goal**: Store test results in Supabase PostgreSQL database (schema already created in Setup Phase).
 
 **Steps**:
-1. Install Supabase client: `bun add @supabase/supabase-js`
-2. Create `src/storage/database.ts` with Supabase client initialization
-3. Define database schema (tables: `test_runs` with columns: id, game_url, status, playability_score, issues, screenshots, timestamp, duration)
-4. Implement `saveTestResult()` function to insert test results
-5. Create `src/storage/types.ts` with TypeScript types matching database schema
-6. Use Supabase TypeScript types generation (if available)
-7. Integrate database save in agent after test completion
+1. Supabase client already installed and configured (Setup Phase)
+2. Database schema already exists: `games`, `game_manifests`, `test_runs` (Setup Phase)
+3. TypeScript types already generated in `src/storage/types.ts` (Setup Phase)
+4. Implement `saveTestResult()` function in `src/storage/database.ts`:
+   - Accept test result data + gameId + optional manifestId
+   - Insert into `test_runs` table
+   - Update `games.last_tested_at` timestamp
+   - Return test run ID
+5. Integrate database save in agent after test completion
+6. Handle database save failures gracefully (log error, still output JSON result)
 
-**Deliverable**: Test results are saved to Supabase database after each test run
+**Deliverable**: Test results are saved to Supabase database after each test run, linked to game record
 
 ---
 
