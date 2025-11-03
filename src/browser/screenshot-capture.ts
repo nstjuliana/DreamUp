@@ -18,10 +18,18 @@ import { logger } from '../utils/logger.js';
 /**
  * Capture screenshot from browser and upload to storage.
  * 
- * Takes a screenshot of the current page state, converts it to a buffer,
- * and uploads it to Supabase Storage. Returns the public URL of the uploaded
- * screenshot. Handles failures gracefully - logs error and returns null rather
- * than throwing to avoid breaking the test flow.
+ * Uses a multi-strategy approach to capture only the game content area:
+ * 1. **Iframes**: Targets iframe elements (most common for embedded games). If multiple
+ *    iframes exist, selects the largest one. Attempts to capture the iframe's content frame.
+ * 2. **Canvas elements**: Targets HTML5 canvas elements (common for HTML5 games). If multiple
+ *    canvases exist, selects the largest one.
+ * 3. **Game container selectors**: Tries common CSS selectors like #game, .game-container,
+ *    #game-canvas, etc. Validates that the container is reasonably sized (>100x100px).
+ * 4. **Full page fallback**: If no game content is found, captures the entire page viewport.
+ * 
+ * Converts the screenshot to a buffer and uploads it to Supabase Storage. Returns the
+ * public URL of the uploaded screenshot. Handles failures gracefully - logs error and
+ * returns null rather than throwing to avoid breaking the test flow.
  * 
  * @param {BrowserClient} client - Active browser client instance
  * @param {string} testId - Unique test run identifier
@@ -55,20 +63,312 @@ export async function captureScreenshot(
       }, 15000);
     });
     
-    // Capture screenshot as buffer with race condition for timeout
-    // Note: Playwright waits for fonts to load by default, which can cause timeouts
-    // on some pages. The timeout prevents indefinite hanging.
-    const screenshotPromise = page.screenshot({
-      type: 'png',
-      fullPage: false, // Capture viewport only for faster screenshots
-      timeout: 15000, // 15 seconds timeout
-      animations: 'disabled', // Disable animations for faster capture
-    });
+    // Multi-strategy approach to find game content:
+    // 1. Try iframes (most common for embedded games)
+    // 2. Try canvas elements (HTML5 games)
+    // 3. Try common game container selectors
+    // 4. Fall back to full page
+    let screenshotBuffer: Buffer | Uint8Array;
+    let strategySucceeded = false;
     
-    const screenshotBuffer = await Promise.race([
-      screenshotPromise,
-      timeoutPromise,
-    ]);
+    // Strategy 1: Try iframes first
+    if (!strategySucceeded) {
+      try {
+        const iframeCount = await page.locator('iframe').count();
+        
+        if (iframeCount > 0) {
+          logger.info('Iframe found, attempting to capture iframe content', { 
+            testId, 
+            index, 
+            iframeCount 
+          });
+          
+          // If multiple iframes, find the largest one (most likely to be the game)
+          let iframeLocator;
+          if (iframeCount > 1) {
+            logger.info('Multiple iframes detected, selecting largest iframe', { 
+              testId, 
+              iframeCount 
+            });
+            
+            // Get all iframes and find the largest one by bounding box area
+            const iframes = await page.locator('iframe').all();
+            let largestIframe = iframes[0];
+            let largestArea = 0;
+            
+            for (const iframe of iframes) {
+              try {
+                const box = await iframe.boundingBox();
+                if (box) {
+                  const area = box.width * box.height;
+                  if (area > largestArea) {
+                    largestArea = area;
+                    largestIframe = iframe;
+                  }
+                }
+              } catch {
+                // Skip iframes that can't be measured
+                continue;
+              }
+            }
+            
+            iframeLocator = largestIframe;
+            logger.info('Selected largest iframe', { 
+              testId, 
+              area: largestArea 
+            });
+          } else {
+            // Single iframe, use it directly
+            iframeLocator = page.locator('iframe').first();
+          }
+          
+          // Wait for iframe to be attached to the page
+          await iframeLocator.waitFor({ state: 'attached', timeout: 5000 }).catch(() => {
+            logger.debug('Iframe attachment timeout, proceeding anyway', { testId });
+          });
+          
+          // Get the content frame from the iframe element
+          const iframeElement = await iframeLocator.elementHandle();
+          const iframeFrame = iframeElement ? await iframeElement.contentFrame() : null;
+          
+          // Try to capture iframe content frame first (if available)
+          if (iframeFrame && iframeFrame !== page.mainFrame()) {
+            // Wait for iframe content to be loaded
+            try {
+              await iframeFrame.waitForLoadState('domcontentloaded', { timeout: 5000 });
+            } catch {
+              logger.debug('Iframe load state timeout, proceeding anyway', { testId });
+            }
+            
+            // Try to capture screenshot of iframe's content frame
+            // Note: Frame.screenshot() might not be available in all Playwright versions
+            try {
+              // Check if screenshot method exists on frame
+              if (typeof iframeFrame.screenshot === 'function') {
+                const screenshotPromise = iframeFrame.screenshot({
+                  type: 'png',
+                  timeout: 15000,
+                  animations: 'disabled',
+                });
+                
+                screenshotBuffer = await Promise.race([
+                  screenshotPromise,
+                  timeoutPromise,
+                ]);
+                
+                logger.info('Screenshot captured from iframe content frame', { testId, index });
+                strategySucceeded = true;
+              } else {
+                logger.debug('Frame.screenshot() not available, will try iframe element', { testId });
+              }
+            } catch (frameScreenshotError) {
+              // Frame.screenshot() failed or not available, try iframe element instead
+              logger.debug('Frame screenshot failed, will try iframe element', {
+                testId,
+                error: frameScreenshotError instanceof Error ? frameScreenshotError.message : String(frameScreenshotError),
+              });
+            }
+          }
+          
+          // If frame screenshot didn't work, try capturing the iframe element itself
+          if (!strategySucceeded) {
+            logger.debug('Capturing iframe element directly', { testId });
+            
+            await iframeLocator.waitFor({ state: 'visible', timeout: 5000 }).catch(() => {
+              logger.debug('Iframe visibility timeout, proceeding anyway', { testId });
+            });
+            
+            try {
+              const screenshotPromise = iframeLocator.screenshot({
+                type: 'png',
+                timeout: 15000,
+                animations: 'disabled',
+              });
+              
+              screenshotBuffer = await Promise.race([
+                screenshotPromise,
+                timeoutPromise,
+              ]);
+              
+              logger.info('Screenshot captured from iframe element', { testId, index });
+              strategySucceeded = true;
+            } catch (iframeElementError) {
+              // Iframe element capture also failed, will try next strategy
+              logger.debug('Iframe element capture failed', {
+                testId,
+                error: iframeElementError instanceof Error ? iframeElementError.message : String(iframeElementError),
+              });
+              throw iframeElementError; // Re-throw to trigger outer catch and move to next strategy
+            }
+          }
+        }
+      } catch (iframeError) {
+        logger.warn('Iframe capture failed, trying next strategy', {
+          testId,
+          index,
+          error: iframeError instanceof Error ? iframeError.message : String(iframeError),
+        });
+      }
+    }
+    
+    // Strategy 2: Try canvas elements (HTML5 games)
+    if (!strategySucceeded) {
+      try {
+        const canvasCount = await page.locator('canvas').count();
+        
+        if (canvasCount > 0) {
+          logger.info('Canvas element found, capturing canvas', { 
+            testId, 
+            index, 
+            canvasCount 
+          });
+          
+          // If multiple canvases, find the largest one
+          let canvasLocator;
+          if (canvasCount > 1) {
+            logger.info('Multiple canvases detected, selecting largest canvas', { 
+              testId, 
+              canvasCount 
+            });
+            
+            const canvases = await page.locator('canvas').all();
+            let largestCanvas = canvases[0];
+            let largestArea = 0;
+            
+            for (const canvas of canvases) {
+              try {
+                const box = await canvas.boundingBox();
+                if (box) {
+                  const area = box.width * box.height;
+                  if (area > largestArea) {
+                    largestArea = area;
+                    largestCanvas = canvas;
+                  }
+                }
+              } catch {
+                continue;
+              }
+            }
+            
+            canvasLocator = largestCanvas;
+            logger.info('Selected largest canvas', { testId, area: largestArea });
+          } else {
+            canvasLocator = page.locator('canvas').first();
+          }
+          
+          await canvasLocator.waitFor({ state: 'visible', timeout: 5000 }).catch(() => {
+            logger.debug('Canvas visibility timeout, proceeding anyway', { testId });
+          });
+          
+          const screenshotPromise = canvasLocator.screenshot({
+            type: 'png',
+            timeout: 15000,
+            animations: 'disabled',
+          });
+          
+          screenshotBuffer = await Promise.race([
+            screenshotPromise,
+            timeoutPromise,
+          ]);
+          
+          logger.info('Screenshot captured from canvas', { testId, index });
+          strategySucceeded = true;
+        }
+      } catch (canvasError) {
+        logger.warn('Canvas capture failed, trying next strategy', {
+          testId,
+          index,
+          error: canvasError instanceof Error ? canvasError.message : String(canvasError),
+        });
+      }
+    }
+    
+    // Strategy 3: Try common game container selectors
+    if (!strategySucceeded) {
+      try {
+        const gameContainerSelectors = [
+          '#game',
+          '#game-container',
+          '#game-canvas',
+          '.game',
+          '.game-container',
+          '.game-canvas',
+          '[id*="game"]',
+          '[class*="game"]',
+          '#play-area',
+          '#game-area',
+          '.play-area',
+          '.game-area',
+        ];
+        
+        let gameContainer = null;
+        for (const selector of gameContainerSelectors) {
+          try {
+            const count = await page.locator(selector).count();
+            if (count > 0) {
+              gameContainer = page.locator(selector).first();
+              const box = await gameContainer.boundingBox();
+              if (box && box.width > 100 && box.height > 100) {
+                // Only use if it's reasonably sized (not a tiny element)
+                logger.info('Game container found', { 
+                  testId, 
+                  selector,
+                  width: box.width,
+                  height: box.height,
+                });
+                break;
+              }
+              gameContainer = null;
+            }
+          } catch {
+            continue;
+          }
+        }
+        
+        if (gameContainer) {
+          await gameContainer.waitFor({ state: 'visible', timeout: 5000 }).catch(() => {
+            logger.debug('Game container visibility timeout, proceeding anyway', { testId });
+          });
+          
+          const screenshotPromise = gameContainer.screenshot({
+            type: 'png',
+            timeout: 15000,
+            animations: 'disabled',
+          });
+          
+          screenshotBuffer = await Promise.race([
+            screenshotPromise,
+            timeoutPromise,
+          ]);
+          
+          logger.info('Screenshot captured from game container', { testId, index });
+          strategySucceeded = true;
+        }
+      } catch (containerError) {
+        logger.warn('Game container capture failed, trying next strategy', {
+          testId,
+          index,
+          error: containerError instanceof Error ? containerError.message : String(containerError),
+        });
+      }
+    }
+    
+    // Strategy 4: Fall back to full page viewport
+    if (!strategySucceeded) {
+      logger.info('No game content found or all strategies failed, capturing page viewport', { testId, index });
+      
+      const screenshotPromise = page.screenshot({
+        type: 'png',
+        fullPage: false,
+        timeout: 15000,
+        animations: 'disabled',
+      });
+      
+      screenshotBuffer = await Promise.race([
+        screenshotPromise,
+        timeoutPromise,
+      ]);
+    }
     
     // Convert to Buffer if it's a Uint8Array
     const buffer = Buffer.from(screenshotBuffer);

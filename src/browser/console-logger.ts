@@ -11,7 +11,6 @@
  */
 
 import type { BrowserClient } from './browser-client.js';
-import type { ConsoleMessage } from '@browserbasehq/stagehand';
 import { uploadConsoleLogs } from '../storage/file-storage.js';
 import { logger } from '../utils/logger.js';
 
@@ -63,7 +62,8 @@ export async function collectConsoleLogs(
     const page = client.getPage();
     
     // Set up console message listener
-    page.on('console', (msg: ConsoleMessage) => {
+    // Type is inferred from Playwright's Page.on('console') event
+    page.on('console', (msg) => {
       const entry: ConsoleLogEntry = {
         type: msg.type(),
         text: msg.text(),
@@ -166,7 +166,8 @@ export async function finalizeConsoleLogs(
  * Format console log entries as readable text.
  * 
  * Converts the array of log entries into a formatted text string suitable
- * for viewing in a text editor or web UI. Includes timestamps and log types.
+ * for viewing in a text editor or web UI. Preserves chronological order
+ * of log entries. Includes timestamps and log types.
  * 
  * @param {ConsoleLogEntry[]} entries - Array of console log entries
  * @returns {string} Formatted log text
@@ -181,38 +182,30 @@ function formatLogsAsText(entries: ConsoleLogEntry[]): string {
     '',
   ];
   
-  // Group entries by type
-  const errorEntries = entries.filter(e => e.type === 'error');
-  const warningEntries = entries.filter(e => e.type === 'warning');
-  const otherEntries = entries.filter(e => e.type !== 'error' && e.type !== 'warning');
+  // Count entries by type for summary
+  const errorCount = entries.filter(e => e.type === 'error').length;
+  const warningCount = entries.filter(e => e.type === 'warning').length;
+  const otherCount = entries.length - errorCount - warningCount;
   
-  // Add errors section
-  if (errorEntries.length > 0) {
-    lines.push('ERRORS:');
+  if (errorCount > 0 || warningCount > 0 || otherCount > 0) {
+    lines.push('SUMMARY:');
+    lines.push(`  Errors: ${errorCount}`);
+    lines.push(`  Warnings: ${warningCount}`);
+    lines.push(`  Other: ${otherCount}`);
+    lines.push('');
+    lines.push('CHRONOLOGICAL LOG ENTRIES:');
     lines.push('-'.repeat(80));
-    errorEntries.forEach(entry => {
-      lines.push(`[${entry.timestamp}] ${entry.text}`);
-    });
     lines.push('');
   }
   
-  // Add warnings section
-  if (warningEntries.length > 0) {
-    lines.push('WARNINGS:');
-    lines.push('-'.repeat(80));
-    warningEntries.forEach(entry => {
-      lines.push(`[${entry.timestamp}] ${entry.text}`);
-    });
-    lines.push('');
-  }
+  // Preserve chronological order - output all entries in the order they occurred
+  entries.forEach(entry => {
+    // Format: [timestamp] [TYPE] message
+    const typeLabel = entry.type.toUpperCase();
+    lines.push(`[${entry.timestamp}] [${typeLabel}] ${entry.text}`);
+  });
   
-  // Add other logs section
-  if (otherEntries.length > 0) {
-    lines.push('OTHER LOGS:');
-    lines.push('-'.repeat(80));
-    otherEntries.forEach(entry => {
-      lines.push(`[${entry.timestamp}] [${entry.type}] ${entry.text}`);
-    });
+  if (entries.length > 0) {
     lines.push('');
   }
   
