@@ -178,6 +178,8 @@ export interface ManifestData {
   };
   gameStates?: GameState[];
   loadingDuration?: number;
+  screenshotIntervals?: number[]; // Time-based screenshot intervals (ms)
+  gameplayDuration?: number; // Gameplay simulation duration (ms, default 30-60s)
   notes?: string;
 }
 

@@ -19,12 +19,13 @@ import { logger } from '../utils/logger.js';
  * Capture screenshot from browser and upload to storage.
  * 
  * Uses a multi-strategy approach to capture only the game content area:
- * 1. **Iframes**: Targets iframe elements (most common for embedded games). If multiple
- *    iframes exist, selects the largest one. Attempts to capture the iframe's content frame.
- * 2. **Canvas elements**: Targets HTML5 canvas elements (common for HTML5 games). If multiple
- *    canvases exist, selects the largest one.
- * 3. **Game container selectors**: Tries common CSS selectors like #game, .game-container,
+ * 1. **Game container selectors**: Tries common CSS selectors like #game, .game-container,
  *    #game-canvas, etc. Validates that the container is reasonably sized (>100x100px).
+ *    Prioritized for DOM-based games.
+ * 2. **Iframes**: Targets iframe elements (most common for embedded games). If multiple
+ *    iframes exist, selects the largest one. Attempts to capture the iframe's content frame.
+ * 3. **Canvas elements**: Targets HTML5 canvas elements (common for HTML5 games). If multiple
+ *    canvases exist, selects the largest one.
  * 4. **Full page fallback**: If no game content is found, captures the entire page viewport.
  * 
  * Converts the screenshot to a buffer and uploads it to Supabase Storage. Returns the
@@ -64,14 +65,84 @@ export async function captureScreenshot(
     });
     
     // Multi-strategy approach to find game content:
-    // 1. Try iframes (most common for embedded games)
-    // 2. Try canvas elements (HTML5 games)
-    // 3. Try common game container selectors
+    // 1. Try common game container selectors (DOM-based games - prioritized)
+    // 2. Try iframes (most common for embedded games)
+    // 3. Try canvas elements (HTML5 games)
     // 4. Fall back to full page
     let screenshotBuffer: Buffer | Uint8Array;
     let strategySucceeded = false;
     
-    // Strategy 1: Try iframes first
+    // Strategy 1: Try common game container selectors (DOM-based games)
+    if (!strategySucceeded) {
+      try {
+        const gameContainerSelectors = [
+          '#game',
+          '#game-container',
+          '#game-canvas',
+          '.game',
+          '.game-container',
+          '.game-canvas',
+          '[id*="game"]',
+          '[class*="game"]',
+          '#play-area',
+          '#game-area',
+          '.play-area',
+          '.game-area',
+        ];
+        
+        let gameContainer = null;
+        for (const selector of gameContainerSelectors) {
+          try {
+            const count = await page.locator(selector).count();
+            if (count > 0) {
+              gameContainer = page.locator(selector).first();
+              const box = await gameContainer.boundingBox();
+              if (box && box.width > 100 && box.height > 100) {
+                // Only use if it's reasonably sized (not a tiny element)
+                logger.info('Game container found', { 
+                  testId, 
+                  selector,
+                  width: box.width,
+                  height: box.height,
+                });
+                break;
+              }
+              gameContainer = null;
+            }
+          } catch {
+            continue;
+          }
+        }
+        
+        if (gameContainer) {
+          await gameContainer.waitFor({ state: 'visible', timeout: 5000 }).catch(() => {
+            logger.debug('Game container visibility timeout, proceeding anyway', { testId });
+          });
+          
+          const screenshotPromise = gameContainer.screenshot({
+            type: 'png',
+            timeout: 15000,
+            animations: 'disabled',
+          });
+          
+          screenshotBuffer = await Promise.race([
+            screenshotPromise,
+            timeoutPromise,
+          ]);
+          
+          logger.info('Screenshot captured from game container', { testId, index });
+          strategySucceeded = true;
+        }
+      } catch (containerError) {
+        logger.warn('Game container capture failed, trying next strategy', {
+          testId,
+          index,
+          error: containerError instanceof Error ? containerError.message : String(containerError),
+        });
+      }
+    }
+    
+    // Strategy 2: Try iframes (embedded games)
     if (!strategySucceeded) {
       try {
         const iframeCount = await page.locator('iframe').count();
@@ -211,7 +282,7 @@ export async function captureScreenshot(
       }
     }
     
-    // Strategy 2: Try canvas elements (HTML5 games)
+    // Strategy 3: Try canvas elements (HTML5 games)
     if (!strategySucceeded) {
       try {
         const canvasCount = await page.locator('canvas').count();
@@ -279,76 +350,6 @@ export async function captureScreenshot(
           testId,
           index,
           error: canvasError instanceof Error ? canvasError.message : String(canvasError),
-        });
-      }
-    }
-    
-    // Strategy 3: Try common game container selectors
-    if (!strategySucceeded) {
-      try {
-        const gameContainerSelectors = [
-          '#game',
-          '#game-container',
-          '#game-canvas',
-          '.game',
-          '.game-container',
-          '.game-canvas',
-          '[id*="game"]',
-          '[class*="game"]',
-          '#play-area',
-          '#game-area',
-          '.play-area',
-          '.game-area',
-        ];
-        
-        let gameContainer = null;
-        for (const selector of gameContainerSelectors) {
-          try {
-            const count = await page.locator(selector).count();
-            if (count > 0) {
-              gameContainer = page.locator(selector).first();
-              const box = await gameContainer.boundingBox();
-              if (box && box.width > 100 && box.height > 100) {
-                // Only use if it's reasonably sized (not a tiny element)
-                logger.info('Game container found', { 
-                  testId, 
-                  selector,
-                  width: box.width,
-                  height: box.height,
-                });
-                break;
-              }
-              gameContainer = null;
-            }
-          } catch {
-            continue;
-          }
-        }
-        
-        if (gameContainer) {
-          await gameContainer.waitFor({ state: 'visible', timeout: 5000 }).catch(() => {
-            logger.debug('Game container visibility timeout, proceeding anyway', { testId });
-          });
-          
-          const screenshotPromise = gameContainer.screenshot({
-            type: 'png',
-            timeout: 15000,
-            animations: 'disabled',
-          });
-          
-          screenshotBuffer = await Promise.race([
-            screenshotPromise,
-            timeoutPromise,
-          ]);
-          
-          logger.info('Screenshot captured from game container', { testId, index });
-          strategySucceeded = true;
-        }
-      } catch (containerError) {
-        logger.warn('Game container capture failed, trying next strategy', {
-          testId,
-          index,
-          error: containerError instanceof Error ? containerError.message : String(containerError),
         });
       }
     }

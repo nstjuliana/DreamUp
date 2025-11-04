@@ -5,21 +5,26 @@
  * 
  * This module handles evaluation of game playability using LLM models (OpenAI/Anthropic).
  * It constructs prompts with evidence (screenshots, console logs), sends them to the LLM,
- * and parses the evaluation results.
+ * and parses the evaluation results. Uses Vercel AI SDK with structured outputs.
  * 
  * @module LLMEvaluator
  */
 
+import { generateObject } from 'ai';
+import { openai } from '@ai-sdk/openai';
 import { EvaluationError } from '../utils/errors.js';
 import { logger } from '../utils/logger.js';
 import { getConfig } from '../utils/config.js';
+import { buildEvaluationPrompt, buildSystemMessage, summarizeConsoleLogs, formatScreenshotsForLLM } from './prompt-builder.js';
+import { parseEvaluationResponse, convertToTestStatus, createDefaultEvaluationResult, type ParsedEvaluationResult } from './result-parser.js';
+import { MAX_RETRY_ATTEMPTS, RETRY_BACKOFF_BASE_MS } from '../utils/constants.js';
 
 /**
  * Evidence for LLM evaluation.
  */
 export interface EvaluationEvidence {
-  /** Array of screenshot URLs or buffers */
-  screenshots: string[];
+  /** Array of screenshot URLs */
+  screenshotUrls: string[];
   /** Console logs */
   consoleLogs: string;
   /** Game metadata */
@@ -29,14 +34,14 @@ export interface EvaluationEvidence {
     url: string;
   };
   /** Optional manifest data for context */
-  manifest?: Record<string, unknown>;
+  manifest?: import('../storage/types.js').ManifestData | null;
 }
 
 /**
  * LLM evaluation result.
  */
 export interface EvaluationResult {
-  /** Pass/fail status */
+  /** Pass/fail/error status */
   status: 'pass' | 'fail' | 'error' | 'timeout';
   /** Playability score (0-100) */
   playabilityScore: number;
@@ -44,8 +49,6 @@ export interface EvaluationResult {
   issues: string[];
   /** Reasoning from LLM */
   reasoning: string;
-  /** Confidence level (0-1) */
-  confidence: number;
 }
 
 /**
@@ -86,118 +89,141 @@ export class LLMEvaluator {
    * Evaluate game playability.
    * 
    * Sends evidence to LLM for analysis and returns structured evaluation.
+   * Uses Vercel AI SDK with structured outputs (Zod schema) for type-safe responses.
+   * Includes retry logic with exponential backoff.
    * 
    * @param {EvaluationEvidence} evidence - Evidence to evaluate
    * @returns {Promise<EvaluationResult>} Evaluation results
-   * @throws {EvaluationError} If evaluation fails
+   * @throws {EvaluationError} If evaluation fails after all retries
    * 
    * @example
    * ```typescript
    * const result = await evaluator.evaluate({
-   *   screenshots: ['url1', 'url2'],
+   *   screenshotUrls: ['url1', 'url2'],
    *   consoleLogs: 'logs...',
    *   gameMetadata: { name: 'Game', type: 'platformer', url: 'https://...' }
    * });
    * ```
    */
   async evaluate(evidence: EvaluationEvidence): Promise<EvaluationResult> {
-    try {
-      logger.info('Starting LLM evaluation', {
+    if (this.config.provider !== 'openai') {
+      logger.warn('OpenAI provider required for full evaluation, using fallback', {
         provider: this.config.provider,
-        screenshotCount: evidence.screenshots.length,
-        hasManifest: !!evidence.manifest,
       });
-
-      // Placeholder: LLM API integration will be implemented in MVP phase
-      // For now, return mock evaluation
-      
-      const result: EvaluationResult = {
-        status: 'pass',
-        playabilityScore: 75,
-        issues: [],
-        reasoning: 'Placeholder evaluation - full implementation coming in MVP phase',
-        confidence: 0.8,
-      };
-
-      logger.info('LLM evaluation complete', {
-        status: result.status,
-        score: result.playabilityScore,
-        issueCount: result.issues.length,
-      });
-
-      return result;
-    } catch (error) {
-      throw new EvaluationError(
-        `LLM evaluation failed: ${error instanceof Error ? error.message : String(error)}`,
-        { evidence, error }
-      );
-    }
-  }
-
-  /**
-   * Build evaluation prompt.
-   * 
-   * Constructs comprehensive prompt with evidence and context.
-   * 
-   * @param {EvaluationEvidence} evidence - Evidence to include
-   * @returns {string} Formatted prompt
-   */
-  private _buildPrompt(evidence: EvaluationEvidence): string {
-    // Placeholder: Prompt engineering will be done in MVP phase
-    logger.debug('Building evaluation prompt', {
-      gameName: evidence.gameMetadata.name,
-      gameType: evidence.gameMetadata.type,
-    });
-
-    return `Evaluate the playability of this browser game...`;
-  }
-
-  /**
-   * Parse LLM response.
-   * 
-   * Extracts structured evaluation from LLM response.
-   * 
-   * @param {string} response - Raw LLM response
-   * @returns {EvaluationResult} Parsed evaluation
-   * @throws {EvaluationError} If response parsing fails
-   */
-  private _parseResponse(response: string): EvaluationResult {
-    // Placeholder: Response parsing will be implemented in MVP phase
-    logger.debug('Parsing LLM response', { responseLength: response.length });
-
-    return {
-      status: 'pass',
-      playabilityScore: 75,
-      issues: [],
-      reasoning: 'Placeholder',
-      confidence: 0.8,
-    };
-  }
-
-  /**
-   * Determine test status from playability score.
-   * 
-   * @param {number} score - Playability score (0-100)
-   * @param {string[]} issues - Identified issues
-   * @returns {'pass' | 'fail'} Test status
-   */
-  private _determineStatus(score: number, issues: string[]): 'pass' | 'fail' {
-    // Placeholder: Status determination logic will be refined in MVP phase
-    const criticalIssues = issues.filter((issue) =>
-      issue.toLowerCase().includes('critical') || issue.toLowerCase().includes('crash')
-    );
-
-    if (criticalIssues.length > 0 || score < 50) {
-      return 'fail';
+      return this.fallbackEvaluation(evidence);
     }
 
-    return 'pass';
+    let lastError: Error | null = null;
+
+    // Retry logic with exponential backoff
+    for (let attempt = 1; attempt <= MAX_RETRY_ATTEMPTS; attempt++) {
+      try {
+        logger.info('Starting LLM evaluation', {
+          provider: this.config.provider,
+          model: this.config.model || 'gpt-4o',
+          screenshotCount: evidence.screenshotUrls.length,
+          hasManifest: !!evidence.manifest,
+          attempt,
+          maxRetries: MAX_RETRY_ATTEMPTS,
+        });
+
+        // Summarize console logs to fit within token limits
+        const summarizedLogs = summarizeConsoleLogs(evidence.consoleLogs, 5000);
+
+        // Build prompt
+        const prompt = buildEvaluationPrompt({
+          screenshotUrls: evidence.screenshotUrls,
+          consoleLogs: summarizedLogs,
+          gameMetadata: evidence.gameMetadata,
+          manifest: evidence.manifest || null,
+        });
+
+        // Format screenshots for vision model
+        const imageInputs = await formatScreenshotsForLLM(evidence.screenshotUrls);
+
+        // Determine model to use (default to gpt-4o for vision support)
+        const modelName = this.config.model || 'gpt-4o';
+
+        // Import schema
+        const { EvaluationResultSchema } = await import('./result-parser.js');
+
+        // Use Vercel AI SDK generateObject with structured outputs
+        // For vision models, use messages format with image inputs
+        const { object } = await generateObject({
+          model: openai(modelName, {
+            apiKey: this.config.apiKey,
+          }),
+          schema: EvaluationResultSchema,
+          messages: [
+            {
+              role: 'system' as const,
+              content: buildSystemMessage(),
+            },
+            {
+              role: 'user' as const,
+              content: imageInputs.length > 0
+                ? [
+                    { type: 'text' as const, text: prompt },
+                    ...imageInputs,
+                  ]
+                : prompt,
+            },
+          ],
+        });
+
+        // Parse and validate response
+        const parsed = parseEvaluationResponse(object);
+        const testStatus = convertToTestStatus(parsed);
+
+        const result: EvaluationResult = {
+          status: testStatus,
+          playabilityScore: parsed.playability_score,
+          issues: parsed.issues,
+          reasoning: parsed.reasoning,
+        };
+
+        logger.info('LLM evaluation complete', {
+          status: result.status,
+          score: result.playabilityScore,
+          issueCount: result.issues.length,
+          attempt,
+        });
+
+        return result;
+      } catch (error) {
+        lastError = error instanceof Error ? error : new Error(String(error));
+        const message = lastError.message;
+
+        if (attempt < MAX_RETRY_ATTEMPTS) {
+          const backoffMs = RETRY_BACKOFF_BASE_MS * Math.pow(2, attempt - 1);
+          logger.warn('LLM evaluation failed, retrying', {
+            attempt,
+            maxRetries: MAX_RETRY_ATTEMPTS,
+            backoffMs,
+            error: message,
+          });
+
+          await new Promise(resolve => setTimeout(resolve, backoffMs));
+        } else {
+          logger.error('LLM evaluation failed after all retries', {
+            attempts: MAX_RETRY_ATTEMPTS,
+            error: message,
+          });
+        }
+      }
+    }
+
+    // All retries failed - use fallback
+    logger.warn('Using fallback evaluation after LLM failures');
+    return this.fallbackEvaluation(evidence);
   }
+
 
   /**
    * Fallback heuristic evaluation.
    * 
-   * Provides basic evaluation when LLM is unavailable.
+   * Provides basic evaluation when LLM is unavailable or fails.
+   * Uses simple heuristics based on available evidence.
    * 
    * @param {EvaluationEvidence} evidence - Evidence to evaluate
    * @returns {EvaluationResult} Heuristic evaluation
@@ -205,22 +231,33 @@ export class LLMEvaluator {
   async fallbackEvaluation(evidence: EvaluationEvidence): Promise<EvaluationResult> {
     logger.warn('Using fallback heuristic evaluation');
 
-    // Placeholder: Heuristic evaluation will be implemented in MVP phase
-    // Basic checks: screenshots captured, no critical console errors
-
-    const hasScreenshots = evidence.screenshots.length > 0;
+    const hasScreenshots = evidence.screenshotUrls.length > 0;
     const hasCriticalErrors = evidence.consoleLogs.toLowerCase().includes('error');
 
     let score = 50; // Base score
-    if (hasScreenshots) score += 25;
-    if (!hasCriticalErrors) score += 25;
+    if (hasScreenshots) {
+      score += 25; // Screenshots captured = game rendered
+    }
+    if (!hasCriticalErrors) {
+      score += 25; // No errors = possibly functional
+    }
+
+    const issues: string[] = [];
+    if (hasCriticalErrors) {
+      issues.push('Console errors detected');
+    }
+    if (!hasScreenshots) {
+      issues.push('No screenshots captured - game may not have loaded');
+      score = Math.min(score, 30); // Penalize heavily for no screenshots
+    }
+
+    const status: 'pass' | 'fail' | 'error' = score >= 70 ? 'pass' : score >= 50 ? 'fail' : 'error';
 
     return {
-      status: score >= 50 ? 'pass' : 'fail',
-      playabilityScore: score,
-      issues: hasCriticalErrors ? ['Console errors detected'] : [],
-      reasoning: 'Fallback heuristic evaluation (LLM unavailable)',
-      confidence: 0.5,
+      status,
+      playabilityScore: Math.max(0, Math.min(100, score)),
+      issues,
+      reasoning: 'Fallback heuristic evaluation (LLM unavailable or failed). Basic checks: screenshots captured, console errors checked.',
     };
   }
 }

@@ -19,10 +19,12 @@
   "author": "",
   "license": "MIT",
   "dependencies": {
+    "@ai-sdk/openai": "^2.0.62",
     "@browserbasehq/stagehand": "^1.6.0",
     "@supabase/supabase-js": "^2.39.0",
     "ai": "^3.0.0",
-    "commander": "^11.1.0"
+    "commander": "^11.1.0",
+    "zod": "^3.25.76"
   },
   "devDependencies": {
     "@types/node": "^20.10.5",
@@ -34,4 +36,3 @@
     "node": ">=18.0.0"
   }
 }
-

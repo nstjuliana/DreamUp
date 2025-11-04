@@ -80,11 +80,12 @@ export class BrowserClient {
    * Load game URL in browser.
    * 
    * Navigates to the specified game URL and waits for the page to be interactive.
-   * Includes timeout handling and retry logic for network errors.
+   * Includes timeout handling and retry logic for network errors (up to 3 attempts
+   * with exponential backoff).
    * 
    * @param {string} url - Game URL to load
    * @returns {Promise<void>}
-   * @throws {BrowserError} If page load fails
+   * @throws {BrowserError} If page load fails after all retries
    * 
    * @example
    * ```typescript
@@ -98,24 +99,57 @@ export class BrowserClient {
       });
     }
     
-    try {
-      logger.info('Loading game URL', { url });
-      
-      // Navigate to URL with timeout
-      await this.page.goto(url, {
-        waitUntil: 'domcontentloaded',
-        timeout: 60000, // 60 seconds
-      });
-      
-      logger.info('Game URL loaded successfully', { url });
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      logger.error('Failed to load game URL', { url, error: message });
-      throw new BrowserError(`Failed to load game: ${url}`, {
-        url,
-        error: message,
-      });
+    const MAX_RETRIES = 3;
+    const RETRY_BACKOFF_BASE_MS = 1000; // 1 second
+    
+    let lastError: Error | null = null;
+    
+    for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
+      try {
+        logger.info('Loading game URL', { url, attempt, maxRetries: MAX_RETRIES });
+        
+        // Navigate to URL with timeout
+        await this.page.goto(url, {
+          waitUntil: 'domcontentloaded',
+          timeout: 60000, // 60 seconds
+        });
+        
+        logger.info('Game URL loaded successfully', { url, attempt });
+        return; // Success - exit function
+      } catch (error) {
+        lastError = error instanceof Error ? error : new Error(String(error));
+        const message = lastError.message;
+        
+        if (attempt < MAX_RETRIES) {
+          // Calculate exponential backoff: 1s, 2s, 4s
+          const backoffMs = RETRY_BACKOFF_BASE_MS * Math.pow(2, attempt - 1);
+          logger.warn('Page load failed, retrying', {
+            url,
+            attempt,
+            maxRetries: MAX_RETRIES,
+            backoffMs,
+            error: message,
+          });
+          
+          // Wait before retry
+          await new Promise(resolve => setTimeout(resolve, backoffMs));
+        } else {
+          // All retries exhausted
+          logger.error('Failed to load game URL after all retries', {
+            url,
+            attempts: MAX_RETRIES,
+            error: message,
+          });
+        }
+      }
     }
+    
+    // If we get here, all retries failed
+    throw new BrowserError(`Failed to load game after ${MAX_RETRIES} attempts: ${url}`, {
+      url,
+      attempts: MAX_RETRIES,
+      error: lastError?.message,
+    });
   }
   
   /**

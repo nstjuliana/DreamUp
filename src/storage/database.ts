@@ -132,6 +132,67 @@ export async function createGame(game: GameInsert): Promise<Game> {
 }
 
 /**
+ * Get all manifests for a game.
+ * 
+ * @param {string} gameId - Game ID
+ * @returns {Promise<GameManifest[]>} Array of all manifests for the game
+ * @throws {StorageError} If database query fails
+ * 
+ * @example
+ * ```typescript
+ * const manifests = await getManifestsForGame(gameId);
+ * console.log(`Found ${manifests.length} manifests`);
+ * ```
+ */
+export async function getManifestsForGame(gameId: string): Promise<GameManifest[]> {
+  const db = getDatabase();
+  
+  const { data, error } = await db
+    .from('game_manifests')
+    .select('*')
+    .eq('game_id', gameId)
+    .order('created_at', { ascending: false });
+
+  if (error) {
+    logger.error('Failed to get manifests for game', { gameId, error: error.message });
+    throw new StorageError(`Failed to get manifests for game: ${error.message}`, { gameId, error });
+  }
+
+  return data || [];
+}
+
+/**
+ * Get manifest by version name.
+ * 
+ * @param {string} gameId - Game ID
+ * @param {string} versionName - Manifest version name (e.g., 'v1.0')
+ * @returns {Promise<GameManifest | null>} Manifest or null if not found
+ * @throws {StorageError} If database query fails
+ * 
+ * @example
+ * ```typescript
+ * const manifest = await getManifestByVersion(gameId, 'v1.0');
+ * ```
+ */
+export async function getManifestByVersion(gameId: string, versionName: string): Promise<GameManifest | null> {
+  const db = getDatabase();
+  
+  const { data, error } = await db
+    .from('game_manifests')
+    .select('*')
+    .eq('game_id', gameId)
+    .eq('version_name', versionName)
+    .single();
+
+  if (error && error.code !== 'PGRST116') {
+    logger.error('Failed to get manifest by version', { gameId, versionName, error: error.message });
+    throw new StorageError(`Failed to get manifest by version: ${error.message}`, { gameId, versionName, error });
+  }
+
+  return data;
+}
+
+/**
  * Get active manifest for a game.
  * 
  * @param {string} gameId - Game ID

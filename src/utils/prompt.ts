@@ -48,6 +48,79 @@ export async function promptYesNo(question: string): Promise<boolean> {
 }
 
 /**
+ * Prompt user to select from a list of options.
+ * 
+ * Displays a numbered list of options and waits for user to select one.
+ * Returns the selected option index (0-based).
+ * 
+ * @param {string} question - Question to ask the user
+ * @param {Array<{label: string, value: unknown}>} options - Array of options with labels
+ * @param {number} [defaultIndex] - Default selection index (0-based)
+ * @returns {Promise<number>} Selected option index
+ * 
+ * @example
+ * ```typescript
+ * const options = [
+ *   { label: 'Option 1', value: 'opt1' },
+ *   { label: 'Option 2', value: 'opt2' }
+ * ];
+ * const selected = await promptSelect('Choose an option:', options, 0);
+ * const selectedValue = options[selected].value;
+ * ```
+ */
+export async function promptSelect<T>(
+  question: string,
+  options: Array<{ label: string; value: T }>,
+  defaultIndex?: number
+): Promise<number> {
+  if (options.length === 0) {
+    throw new Error('Cannot prompt select with empty options');
+  }
+
+  const rl = readline.createInterface({
+    input: process.stdin,
+    output: process.stdout,
+  });
+
+  // Display options
+  console.log(`\n${question}`);
+  options.forEach((option, index) => {
+    const marker = defaultIndex === index ? ' [default]' : '';
+    console.log(`  [${index + 1}] ${option.label}${marker}`);
+  });
+
+  const defaultText = defaultIndex !== undefined ? ` [${defaultIndex + 1}]` : '';
+  const promptText = `\nEnter selection${defaultText}: `;
+
+  return new Promise<number>((resolve) => {
+    rl.question(promptText, (answer) => {
+      rl.close();
+
+      const trimmed = answer.trim();
+      
+      // Use default if empty input
+      if (!trimmed && defaultIndex !== undefined) {
+        resolve(defaultIndex);
+        return;
+      }
+
+      // Parse as number
+      const selected = parseInt(trimmed, 10);
+      
+      if (isNaN(selected) || selected < 1 || selected > options.length) {
+        // Invalid input, ask again
+        console.log(`Invalid selection. Please enter a number between 1 and ${options.length}.`);
+        // Recursively prompt again
+        promptSelect(question, options, defaultIndex).then(resolve);
+        return;
+      }
+
+      resolve(selected - 1); // Convert to 0-based index
+    });
+  });
+}
+
+/**
  * Prompt user for text input.
  * 
  * Displays a question and waits for user input.

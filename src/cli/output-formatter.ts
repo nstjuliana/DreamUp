@@ -208,8 +208,7 @@ export function createSuccessResult(
   
   return {
     status,
-    // TODO: Replace with actual LLM evaluation in Enhancement Phase 1
-    playability_score: 50,
+    playability_score: partial?.playability_score ?? 50,
     issues: data.issues || [],
     screenshots: data.screenshots,
     console_logs: data.console_logs,
