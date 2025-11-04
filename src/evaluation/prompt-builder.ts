@@ -11,6 +11,7 @@
  */
 
 import type { ManifestData } from '../storage/types.js';
+import { logger } from '../utils/logger.js';
 
 /**
  * Evaluation evidence for prompt construction.
@@ -161,22 +162,61 @@ Provide your assessment as structured JSON.`;
  * Format screenshot URLs for LLM input.
  * 
  * Converts screenshot URLs to a format suitable for LLM vision models.
- * For OpenAI, this means fetching and converting to base64.
+ * Fetches images from URLs and converts them to Buffers for use with OpenAI SDK.
+ * Buffers are later converted to base64 data URLs in the evaluator.
  * 
- * @param {string[]} screenshotUrls - Array of screenshot URLs
- * @returns {Promise<Array<{type: 'image_url', image_url: {url: string}}>>} Formatted image inputs
+ * @param {string[]} screenshotUrls - Array of screenshot URLs (must be publicly accessible)
+ * @returns {Promise<Array<{type: 'image', image: Buffer}>>} Formatted image inputs
  */
 export async function formatScreenshotsForLLM(
   screenshotUrls: string[]
-): Promise<Array<{ type: 'image_url'; image_url: { url: string } }>> {
-  // For OpenAI vision models, we can use URLs directly if they're publicly accessible
-  // If screenshots are in Supabase Storage with public URLs, we can use them as-is
-  // Otherwise, we'd need to fetch and convert to base64
+): Promise<Array<{ type: 'image'; image: Buffer }>> {
+  // Fetch images from URLs and convert to Buffers
+  // These Buffers will be converted to base64 data URLs for OpenAI API
   
-  return screenshotUrls.map((url) => ({
-    type: 'image_url' as const,
-    image_url: { url },
-  }));
+  const imageInputs: Array<{ type: 'image'; image: Buffer }> = [];
+  
+  for (const url of screenshotUrls) {
+    try {
+      // Fetch image from URL
+      const response = await fetch(url);
+      if (!response.ok) {
+        logger.warn('Failed to fetch screenshot for LLM', {
+          url,
+          status: response.status,
+          statusText: response.statusText,
+        });
+        continue;
+      }
+      
+      // Convert to Buffer
+      const arrayBuffer = await response.arrayBuffer();
+      const buffer = Buffer.from(arrayBuffer);
+      
+      if (buffer.length === 0) {
+        logger.warn('Screenshot fetched but is empty', { url });
+        continue;
+      }
+      
+      imageInputs.push({
+        type: 'image' as const,
+        image: buffer,
+      });
+      
+      logger.debug('Screenshot formatted for LLM', {
+        url,
+        sizeBytes: buffer.length,
+      });
+    } catch (error) {
+      logger.warn('Error fetching screenshot for LLM', {
+        url,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      // Continue with other images even if one fails
+    }
+  }
+  
+  return imageInputs;
 }
 
 /**

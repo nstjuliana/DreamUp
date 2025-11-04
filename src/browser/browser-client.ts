@@ -299,6 +299,28 @@ export class BrowserClient {
     }
     return this.page;
   }
+
+  /**
+   * Get the Stagehand instance.
+   * 
+   * Returns the Stagehand instance for AI-powered browser operations
+   * like observe() and act().
+   * 
+   * @returns {Stagehand} Stagehand instance
+   * @throws {BrowserError} If no active session
+   * 
+   * @example
+   * ```typescript
+   * const stagehand = client.getStagehand();
+   * const buttons = await stagehand.page.observe("Find the start button");
+   * ```
+   */
+  getStagehand(): Stagehand {
+    if (!this.stagehand) {
+      throw new BrowserError('Browser session not initialized');
+    }
+    return this.stagehand;
+  }
   
   /**
    * Close browser session and cleanup resources.

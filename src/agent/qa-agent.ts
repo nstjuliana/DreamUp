@@ -238,26 +238,59 @@ export class QAAgent {
       // Phase 4: Interaction
       currentState = updatePhase(currentState, 'interacting');
       
-      // Find and click start button
-      const startButtonLocation = await findStartButton(this.browserClient, currentState.manifest);
-      if (startButtonLocation.locator) {
-        logger.info('Start button found, clicking', {
+      // Find and click start button using StageHand AI
+      const startButtonLocation = await findStartButton(this.browserClient, currentState.manifest || null);
+      
+      if (!startButtonLocation.element) {
+        // Start button not found - this is a critical failure
+        const errorMessage = 'Start button not found by StageHand AI. Cannot proceed with test.';
+        logger.error(errorMessage, {
           testId: currentState.testId,
           method: startButtonLocation.method,
+          failureScreenshot: startButtonLocation.failureScreenshot,
+          allButtonsFound: startButtonLocation.allButtonsFound?.map(b => b.description),
         });
-        await clickElement(this.browserClient, startButtonLocation);
 
-        // Wait after clicking start button
-        const waitAfterClick = currentState.manifest?.startButton?.waitAfterClick || START_BUTTON_WAIT_MS;
-        await new Promise(resolve => setTimeout(resolve, waitAfterClick));
-
-        // Capture screenshot after start click
-        const afterStartScreenshot = await captureScreenshot(this.browserClient, currentState.testId, 1);
-        if (afterStartScreenshot) {
-          currentState = addScreenshot(currentState, afterStartScreenshot);
+        // Add failure screenshot to state if available
+        if (startButtonLocation.failureScreenshot) {
+          currentState = addScreenshot(currentState, startButtonLocation.failureScreenshot);
         }
-      } else {
-        logger.warn('Start button not found, skipping interaction', { testId: currentState.testId });
+
+        // Create detailed error message with diagnostic info
+        let detailedError = errorMessage;
+        if (startButtonLocation.allButtonsFound && startButtonLocation.allButtonsFound.length > 0) {
+          detailedError += `\n\nButtons found on page (${startButtonLocation.allButtonsFound.length}):`;
+          startButtonLocation.allButtonsFound.forEach((btn, i) => {
+            detailedError += `\n  ${i + 1}. ${btn.description} (${btn.method || 'no method'})`;
+          });
+        } else {
+          detailedError += '\n\nNo buttons found on page.';
+        }
+        
+        if (startButtonLocation.failureScreenshot) {
+          detailedError += `\n\nFailure screenshot: ${startButtonLocation.failureScreenshot}`;
+        }
+
+        throw new Error(detailedError);
+      }
+
+      // Button found - click it
+      logger.info('Start button found using StageHand, clicking', {
+        testId: currentState.testId,
+        method: startButtonLocation.method,
+        description: startButtonLocation.element.description,
+      });
+      
+      await clickElement(this.browserClient, startButtonLocation);
+
+      // Wait after clicking start button
+      const waitAfterClick = currentState.manifest?.startButton?.waitAfterClick || START_BUTTON_WAIT_MS;
+      await new Promise(resolve => setTimeout(resolve, waitAfterClick));
+
+      // Capture screenshot after start click
+      const afterStartScreenshot = await captureScreenshot(this.browserClient, currentState.testId, 1);
+      if (afterStartScreenshot) {
+        currentState = addScreenshot(currentState, afterStartScreenshot);
       }
 
       // Simulate gameplay
