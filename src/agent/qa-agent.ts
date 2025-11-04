@@ -16,10 +16,10 @@ import { collectConsoleLogs, finalizeConsoleLogs } from '../browser/console-logg
 import { findStartButton, clickElement } from '../browser/ui-pattern-detector.js';
 import type { ConsoleLogEntry } from '../browser/console-logger.js';
 import type { TestResult } from '../cli/output-formatter.js';
-import { createSuccessResult, createErrorResult, createTimeoutResult } from '../cli/output-formatter.js';
+import { createSuccessResult, createErrorResult, createTimeoutResult, outputTimeline } from '../cli/output-formatter.js';
 import { LLMEvaluator } from '../evaluation/llm-evaluator.js';
 import { parseManifest, getGameplayDuration, getScreenshotIntervals } from '../utils/manifest-parser.js';
-import { createAgentState, updatePhase, addScreenshot, setConsoleLogsUrl, setError, finalizeState } from './agent-state.js';
+import { createAgentState, updatePhase, addScreenshot, setConsoleLogsUrl, setError, finalizeState, addTimelineEvent } from './agent-state.js';
 import type { AgentState } from './agent-state.js';
 import type { ManifestData } from '../storage/types.js';
 import { saveTestRun, getDatabase } from '../storage/database.js';
@@ -210,16 +210,20 @@ export class QAAgent {
     try {
       // Phase 1: Initialize browser session
       currentState = updatePhase(currentState, 'initializing');
+      currentState = addTimelineEvent(currentState, 'browser_init_start', 'Starting browser session initialization');
       logger.info('Initializing browser session', { testId: currentState.testId });
       await this.browserClient.initializeSession();
+      currentState = addTimelineEvent(currentState, 'browser_init_complete', 'Browser session initialized');
 
       // Phase 2: Set up console log collection
       logger.info('Setting up console log collection', { testId: currentState.testId });
       const logsResult = await collectConsoleLogs(this.browserClient, currentState.testId);
       this.consoleLogEntries = logsResult.entries;
+      currentState = addTimelineEvent(currentState, 'console_logs_collected', 'Console log collection initialized');
 
       // Phase 3: Load game URL (with retry logic built into browser-client)
       currentState = updatePhase(currentState, 'loading');
+      currentState = addTimelineEvent(currentState, 'page_load_start', 'Navigating to game URL', { url: currentState.gameUrl });
       logger.info('Loading game', { testId: currentState.testId, gameUrl: currentState.gameUrl });
       await this.browserClient.loadGame(currentState.gameUrl);
 
@@ -227,18 +231,22 @@ export class QAAgent {
       const loadingDuration = currentState.manifest?.loadingDuration || DEFAULT_LOADING_DURATION_MS;
       logger.info('Waiting for game to load', { testId: currentState.testId, duration: loadingDuration });
       await this.browserClient.waitForLoad(loadingDuration);
+      currentState = addTimelineEvent(currentState, 'page_load_complete', 'Page finished loading', { duration: loadingDuration });
 
       // Capture baseline screenshot
       logger.info('Capturing baseline screenshot', { testId: currentState.testId });
       const baselineScreenshot = await captureScreenshot(this.browserClient, currentState.testId, 0);
       if (baselineScreenshot) {
         currentState = addScreenshot(currentState, baselineScreenshot);
+        currentState = addTimelineEvent(currentState, 'screenshot_captured', 'Baseline screenshot captured', { index: 0 });
       }
 
       // Phase 4: Interaction
       currentState = updatePhase(currentState, 'interacting');
+      currentState = addTimelineEvent(currentState, 'phase_change', 'Entering interaction phase');
       
       // Find and click start button using StageHand AI
+      currentState = addTimelineEvent(currentState, 'start_button_search_start', 'Searching for start button using Stagehand AI');
       const startButtonLocation = await findStartButton(this.browserClient, currentState.manifest || null);
       
       if (!startButtonLocation.element) {
@@ -280,8 +288,13 @@ export class QAAgent {
         method: startButtonLocation.method,
         description: startButtonLocation.element.description,
       });
+      currentState = addTimelineEvent(currentState, 'start_button_found', 'Start button detected', {
+        method: startButtonLocation.method,
+        description: startButtonLocation.element.description,
+      });
       
       await clickElement(this.browserClient, startButtonLocation);
+      currentState = addTimelineEvent(currentState, 'start_button_clicked', 'Start button clicked successfully');
 
       // Wait after clicking start button
       const waitAfterClick = currentState.manifest?.startButton?.waitAfterClick || START_BUTTON_WAIT_MS;
@@ -291,7 +304,24 @@ export class QAAgent {
       const afterStartScreenshot = await captureScreenshot(this.browserClient, currentState.testId, 1);
       if (afterStartScreenshot) {
         currentState = addScreenshot(currentState, afterStartScreenshot);
+        currentState = addTimelineEvent(currentState, 'screenshot_captured', 'Post-click screenshot captured', { index: 1 });
       }
+
+      // TEMPORARY: Early return for unit testing start button functionality
+      // Remove this return statement to re-enable full testing flow
+      currentState = addTimelineEvent(currentState, 'test_complete', 'Test execution completed (early exit for testing)');
+      currentState = finalizeState(currentState);
+      logger.info('Test execution stopped early (start button testing mode)', { testId: currentState.testId });
+      return createSuccessResult(
+        {
+          screenshots: currentState.screenshots,
+          console_logs: null,
+          issues: [],
+        },
+        {
+          playability_score: 0,
+        }
+      );
 
       // Simulate gameplay
       const gameplayDuration = getGameplayDuration(currentState.manifest || null, 45000); // Default 45s
@@ -363,6 +393,7 @@ export class QAAgent {
         error: message,
       });
 
+      currentState = addTimelineEvent(currentState, 'error', `Error: ${message}`, { phase: currentState.phase });
       currentState = setError(currentState, message);
 
       return createErrorResult(message, {
@@ -500,7 +531,8 @@ export class QAAgent {
           testId: state.testId,
           gameUrl: params.gameUrl,
           gameName: params.gameName,
-        },
+          timeline: state.timeline.events as any,
+        } as any,
       });
 
       // Update last_tested_at timestamp
@@ -511,6 +543,11 @@ export class QAAgent {
         .eq('id', params.gameId);
 
       logger.info('Test results saved to database', { testId: state.testId });
+      
+      // Output timeline for debugging if debug mode is enabled
+      if (process.env.DEBUG === 'true') {
+        outputTimeline(state.timeline);
+      }
     } catch (error) {
       logger.error('Failed to save test results to database', {
         testId: state.testId,

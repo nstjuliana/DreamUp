@@ -4,13 +4,15 @@
  * Agent state management for QA test execution.
  * 
  * This module tracks the agent's state throughout test execution, including
- * current phase, test metadata, evidence collection, and error context.
+ * current phase, test metadata, evidence collection, error context, and
+ * detailed timeline of events.
  * Used for better error handling, logging, and debugging.
  * 
  * @module AgentState
  */
 
 import type { ManifestData } from '../storage/types.js';
+import { createTimeline, addEvent, type Timeline, type TimelineEventType } from './timeline.js';
 
 /**
  * Agent execution phase.
@@ -46,6 +48,9 @@ export interface AgentState {
   /** Evidence collection */
   screenshots: string[];
   consoleLogsUrl?: string | null;
+
+  /** Timeline tracking */
+  timeline: Timeline;
 
   /** Error context */
   phaseFailed?: AgentPhase;
@@ -94,6 +99,7 @@ export function createAgentState(params: {
     manifest: params.manifest,
     startTime: Date.now(),
     screenshots: [],
+    timeline: createTimeline(),
     metadata: {},
   };
 }
@@ -259,6 +265,37 @@ export function getErrorSummary(state: AgentState): {
     phase: state.phaseFailed || state.phase,
     message: state.errorMessage || 'Unknown error',
     context: state.errorContext,
+  };
+}
+
+/**
+ * Add timeline event to agent state.
+ * 
+ * Adds a timestamped event to the agent's timeline for tracking
+ * test execution progress and debugging.
+ * 
+ * @param {AgentState} state - Current agent state
+ * @param {TimelineEventType} type - Event type
+ * @param {string} description - Human-readable event description
+ * @param {Record<string, unknown>} [metadata] - Optional additional event data
+ * @returns {AgentState} Updated agent state with new timeline event
+ * 
+ * @example
+ * ```typescript
+ * state = addTimelineEvent(state, 'page_load_start', 'Navigating to game URL', {
+ *   url: gameUrl
+ * });
+ * ```
+ */
+export function addTimelineEvent(
+  state: AgentState,
+  type: TimelineEventType,
+  description: string,
+  metadata?: Record<string, unknown>
+): AgentState {
+  return {
+    ...state,
+    timeline: addEvent(state.timeline, type, description, metadata),
   };
 }
 

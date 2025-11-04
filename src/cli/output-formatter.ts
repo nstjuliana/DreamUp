@@ -5,11 +5,13 @@
  * 
  * This module provides functions for formatting test results as JSON for CLI output.
  * Defines the TestResult interface and provides pretty-printing for terminal display.
+ * Also includes timeline formatting for debugging purposes.
  * 
  * @module OutputFormatter
  */
 
 import { logger } from '../utils/logger.js';
+import { formatTimeline, type Timeline } from '../agent/timeline.js';
 
 /**
  * Test result status type.
@@ -218,5 +220,23 @@ export function createSuccessResult(
     game_name: partial?.game_name,
     test_id: partial?.test_id,
   };
+}
+
+/**
+ * Output timeline to console for debugging.
+ * 
+ * Formats and outputs a test timeline to the console in a human-readable format.
+ * Useful for debugging test execution and identifying performance bottlenecks.
+ * 
+ * @param {Timeline} timeline - Timeline to output
+ * 
+ * @example
+ * ```typescript
+ * outputTimeline(state.timeline);
+ * ```
+ */
+export function outputTimeline(timeline: Timeline): void {
+  const formatted = formatTimeline(timeline);
+  console.log('\n' + formatted);
 }
 
