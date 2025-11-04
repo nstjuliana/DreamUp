@@ -3,7 +3,7 @@
  * 
  * LLM-based game evaluation.
  * 
- * This module handles evaluation of game playability using LLM models (OpenAI/Anthropic).
+ * This module handles evaluation of game playability using LLM models (OpenAI).
  * It constructs prompts with evidence (screenshots, console logs), sends them to the LLM,
  * and parses the evaluation results. Uses official OpenAI SDK for multimodal queries.
  * 

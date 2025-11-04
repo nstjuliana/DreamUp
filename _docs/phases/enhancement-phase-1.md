@@ -93,10 +93,10 @@
 
 ### 5. LLM Evaluation Integration
 
-**Goal**: Use LLM (via Vercel AI SDK) to analyze screenshots and logs for playability assessment.
+**Goal**: Use LLM (via OpenAI SDK) to analyze screenshots and logs for playability assessment.
 
 **Steps**:
-1. Install Vercel AI SDK: `bun add ai` and LLM provider SDK (e.g., `openai`)
+1. Install OpenAI SDK: `npm install openai`
 2. Create `src/evaluation/llm-evaluator.ts` with `LLMEvaluator` class
 3. Create `src/evaluation/prompt-builder.ts` with structured prompt generation
 4. Implement `evaluateGame()` method that:
@@ -122,7 +122,7 @@
    - "Does the game load successfully?"
    - "Are controls responsive?"
    - "Did the game complete without crashes?"
-3. Use Vercel AI SDK structured outputs to ensure JSON format
+3. Use OpenAI SDK function calling to ensure JSON format
 4. Include screenshot context (describe what's visible)
 5. Include console log analysis (errors, warnings)
 6. Test prompts with sample games and refine for accuracy

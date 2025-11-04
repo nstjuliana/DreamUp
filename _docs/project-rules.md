@@ -521,7 +521,6 @@ export interface Config {
     projectId: string;
   };
   llm: {
-    provider: 'openai' | 'anthropic';
     apiKey: string;
   };
 }
