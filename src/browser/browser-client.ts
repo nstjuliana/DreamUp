@@ -61,12 +61,46 @@ export class BrowserClient {
       // Get the page instance
       this.page = this.stagehand.page;
       
+      // Try to extract session ID for live viewing
+      // Stagehand may expose this through the browser context or internal properties
+      try {
+        // Try to get session ID from Stagehand's internal browser context
+        // @ts-ignore - accessing internal property that may exist
+        const browserContext = this.page.context();
+        // @ts-ignore - Browserbase may attach session info
+        const sessionInfo = browserContext?._browserbaseSessionId || browserContext?.sessionId;
+        
+        if (sessionInfo) {
+          this.sessionId = String(sessionInfo);
+        } else {
+          // Alternative: try to get from Stagehand instance
+          // @ts-ignore - Stagehand may expose session ID
+          this.sessionId = this.stagehand.sessionId || this.stagehand._sessionId || null;
+        }
+      } catch {
+        // Session ID extraction failed - not critical
+        this.sessionId = null;
+      }
+      
       // Set default timeout
       await this.page.setDefaultTimeout(60000); // 60 seconds for operations
       
+      const sessionUrl = this.getSessionUrl();
       logger.info('Browser session initialized', {
         hasPage: !!this.page,
+        sessionId: this.sessionId,
+        liveViewUrl: sessionUrl || 'Not available',
       });
+      
+      if (sessionUrl) {
+        logger.info('\n🌐 LIVE BROWSER VIEW AVAILABLE 🌐');
+        logger.info(`Watch the browser in real-time: ${sessionUrl}`);
+        logger.info('(Copy and paste this URL in your browser to view)\n');
+      } else {
+        logger.info('\n💡 TIP: To view the browser live, check your Browserbase dashboard:');
+        logger.info('   https://www.browserbase.com/sessions');
+        logger.info('   (Look for the most recent session)\n');
+      }
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       logger.error('Failed to initialize browser session', { error: message });
@@ -261,5 +295,37 @@ export class BrowserClient {
    */
   isActive(): boolean {
     return this.page !== null && this.stagehand !== null;
+  }
+
+  /**
+   * Get the Browserbase session URL for live viewing.
+   * 
+   * Returns a URL that can be opened in a browser to view the session live.
+   * Only available if session ID was successfully extracted.
+   * 
+   * @returns {string | null} Browserbase session URL or null if not available
+   * 
+   * @example
+   * ```typescript
+   * const url = client.getSessionUrl();
+   * if (url) {
+   *   console.log(`View session: ${url}`);
+   * }
+   * ```
+   */
+  getSessionUrl(): string | null {
+    if (!this.sessionId) {
+      return null;
+    }
+    return `https://www.browserbase.com/sessions/${this.sessionId}`;
+  }
+
+  /**
+   * Get the Browserbase session ID.
+   * 
+   * @returns {string | null} Session ID or null if not available
+   */
+  getSessionId(): string | null {
+    return this.sessionId;
   }
 }

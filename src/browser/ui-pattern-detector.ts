@@ -12,9 +12,12 @@
 
 import type { BrowserClient } from './browser-client.js';
 import type { ManifestData } from '../storage/types.js';
-import type { Locator } from '@browserbasehq/stagehand';
+import type { Page } from '@browserbasehq/stagehand';
 import { BrowserError } from '../utils/errors.js';
 import { logger } from '../utils/logger.js';
+
+// Locator type from Playwright (Stagehand uses Playwright under the hood)
+type Locator = Awaited<ReturnType<Page['locator']>>;
 
 /**
  * Element location result.
@@ -96,11 +99,13 @@ export async function findStartButton(
       });
 
       // Try common button selectors with text matching
+      // Order matters: most specific first, avoid generic * selector
       const buttonSelectors = [
         `button:has-text("${manifest.startButton.text}")`,
         `[role="button"]:has-text("${manifest.startButton.text}")`,
         `a:has-text("${manifest.startButton.text}")`,
-        `*:has-text("${manifest.startButton.text}")`,
+        `div:has-text("${manifest.startButton.text}")`,
+        `span:has-text("${manifest.startButton.text}")`,
       ];
 
       for (const selector of buttonSelectors) {
@@ -109,21 +114,256 @@ export async function findStartButton(
           const count = await locator.count();
 
           if (count > 0) {
-            const firstLocator = locator.first();
-            await firstLocator.waitFor({ state: 'visible', timeout: 5000 });
-            logger.info('Start button found using manifest text', {
-              text: manifest.startButton.text,
-              selector,
-            });
-            return {
-              locator: firstLocator,
-              method: 'manifest-text',
-              selector,
-            };
+            // Filter out non-interactive elements (html, body, etc.)
+            // and find the most specific/clickable element
+            const allElements = await locator.all();
+            
+            for (const elementLocator of allElements) {
+              try {
+                // Check if it's a non-interactive container element
+                const tagName = await elementLocator.evaluate((el) => el.tagName.toLowerCase());
+                
+                // Skip root elements
+                if (tagName === 'html' || tagName === 'body') {
+                  continue;
+                }
+
+                // Check if element is clickable (has onclick, is button-like, or has cursor pointer)
+                const isClickable = await elementLocator.evaluate((el) => {
+                  const tag = el.tagName.toLowerCase();
+                  const hasOnClick = el.getAttribute('onclick') !== null;
+                  const win = el.ownerDocument.defaultView;
+                  if (!win) return false;
+                  const style = win.getComputedStyle(el);
+                  const cursor = style.cursor;
+                  const role = el.getAttribute('role');
+                  
+                  return (
+                    tag === 'button' ||
+                    tag === 'a' ||
+                    role === 'button' ||
+                    hasOnClick ||
+                    cursor === 'pointer' ||
+                    el.classList.contains('button') ||
+                    el.classList.contains('btn') ||
+                    el.classList.contains('roundbutton')
+                  );
+                }).catch(() => false);
+
+                if (isClickable || tagName === 'button' || tagName === 'a') {
+                  await elementLocator.waitFor({ state: 'visible', timeout: 5000 });
+                  logger.info('Start button found using manifest text', {
+                    text: manifest.startButton.text,
+                    selector,
+                    tagName,
+                  });
+                  return {
+                    locator: elementLocator,
+                    method: 'manifest-text',
+                    selector,
+                  };
+                }
+              } catch {
+                continue;
+              }
+            }
+            
+            // If no clickable element found, check if we have a container element
+            // and search for clickable children within it
+            for (const elementLocator of allElements) {
+              try {
+                const tagName = await elementLocator.evaluate((el) => el.tagName.toLowerCase());
+                if (tagName !== 'html' && tagName !== 'body') {
+                  // Check if this element contains clickable children with the text
+                  try {
+                    // Search for clickable children with the text
+                    const clickableChildren = await elementLocator.locator(
+                      `button:has-text("${manifest.startButton.text}"), a:has-text("${manifest.startButton.text}"), [role="button"]:has-text("${manifest.startButton.text}"), .roundbutton:has-text("${manifest.startButton.text}"), .button:has-text("${manifest.startButton.text}"), [class*="button"]:has-text("${manifest.startButton.text}")`
+                    ).all();
+                    
+                    if (clickableChildren.length > 0 && clickableChildren[0]) {
+                      // Found a clickable child - use it instead
+                      const childLocator = clickableChildren[0];
+                      await childLocator.waitFor({ state: 'visible', timeout: 5000 });
+                      logger.info('Start button found as clickable child of container', {
+                        text: manifest.startButton.text,
+                        selector,
+                        parentTag: tagName,
+                      });
+                      return {
+                        locator: childLocator,
+                        method: 'manifest-text',
+                        selector: `${selector} > clickable-child`,
+                      };
+                    }
+                    
+                    // Also try to find by text node and walk up to clickable parent
+                    const textNodeLocator = elementLocator.locator(`text="${manifest.startButton.text}"`);
+                    const textNodeCount = await textNodeLocator.count();
+                    if (textNodeCount > 0) {
+                      const textNode = textNodeLocator.first();
+                      const clickableParentInfo = await textNode.evaluate((el) => {
+                        let current = el.parentElement;
+                        while (current && current.tagName !== 'HTML') {
+                          const tag = current.tagName.toLowerCase();
+                          const win = current.ownerDocument.defaultView;
+                          if (!win) {
+                            current = current.parentElement;
+                            continue;
+                          }
+                          const style = win.getComputedStyle(current);
+                          const cursor = style.cursor;
+                          const role = current.getAttribute('role');
+                          
+                          if (
+                            tag === 'button' ||
+                            tag === 'a' ||
+                            role === 'button' ||
+                            cursor === 'pointer' ||
+                            current.classList.contains('button') ||
+                            current.classList.contains('btn') ||
+                            current.classList.contains('roundbutton')
+                          ) {
+                            const id = current.id ? `#${current.id}` : '';
+                            const classes = Array.from(current.classList).map(c => `.${c}`).join('');
+                            return { tag, id, classes, found: true };
+                          }
+                          current = current.parentElement;
+                        }
+                        return { found: false };
+                      }).catch(() => ({ found: false }));
+                      
+                      if (clickableParentInfo && 'found' in clickableParentInfo && clickableParentInfo.found && 'tag' in clickableParentInfo) {
+                        // Construct selector for the clickable parent
+                        let parentSelector = clickableParentInfo.tag;
+                        if (clickableParentInfo.id && clickableParentInfo.id.length > 1) {
+                          parentSelector = clickableParentInfo.id;
+                        } else if (clickableParentInfo.classes) {
+                          parentSelector = clickableParentInfo.classes.split(' ')[0];
+                        }
+                        
+                        const parentLocator = page.locator(`${parentSelector}:has-text("${manifest.startButton.text}")`);
+                        const parentCount = await parentLocator.count();
+                        if (parentCount > 0) {
+                          const firstParent = parentLocator.first();
+                          await firstParent.waitFor({ state: 'visible', timeout: 5000 });
+                          logger.info('Start button found via text node parent traversal', {
+                            text: manifest.startButton.text,
+                            selector: parentSelector,
+                          });
+                          return {
+                            locator: firstParent,
+                            method: 'manifest-text',
+                            selector: `parent:${parentSelector}`,
+                          };
+                        }
+                      }
+                    }
+                  } catch (childSearchError) {
+                    // Failed to find clickable child, continue to fallback
+                    logger.debug('Failed to find clickable child in container', {
+                      error: childSearchError instanceof Error ? childSearchError.message : String(childSearchError),
+                    });
+                  }
+                  
+                  // Last resort: use the container element itself
+                  await elementLocator.waitFor({ state: 'visible', timeout: 5000 });
+                  logger.warn('Using non-clickable container element as fallback', {
+                    text: manifest.startButton.text,
+                    selector,
+                    tagName,
+                  });
+                  return {
+                    locator: elementLocator,
+                    method: 'manifest-text',
+                    selector,
+                  };
+                }
+              } catch {
+                continue;
+              }
+            }
           }
         } catch {
           continue;
         }
+      }
+      
+      // Last resort: try to find element by exact text content match and find clickable parent
+      try {
+        const exactTextLocator = page.locator(`text="${manifest.startButton.text}"`);
+        const count = await exactTextLocator.count();
+        if (count > 0) {
+          // Find the parent element that's likely the button
+          const allTextElements = await exactTextLocator.all();
+          for (const textElement of allTextElements) {
+            try {
+              // Try to find a clickable parent by traversing up the DOM
+              const clickableParentInfo = await textElement.evaluate((el) => {
+                let current = el.parentElement;
+                while (current && current.tagName !== 'HTML') {
+                  const tag = current.tagName.toLowerCase();
+                  const win = current.ownerDocument.defaultView;
+                  if (!win) {
+                    current = current.parentElement;
+                    continue;
+                  }
+                  const style = win.getComputedStyle(current);
+                  const cursor = style.cursor;
+                  const role = current.getAttribute('role');
+                  
+                  if (
+                    tag === 'button' ||
+                    tag === 'a' ||
+                    role === 'button' ||
+                    cursor === 'pointer' ||
+                    current.classList.contains('button') ||
+                    current.classList.contains('btn') ||
+                    current.classList.contains('roundbutton')
+                  ) {
+                    // Return selector info to find this element
+                    const id = current.id ? `#${current.id}` : '';
+                    const classes = Array.from(current.classList).map(c => `.${c}`).join('');
+                    return { tag, id, classes, found: true };
+                  }
+                  current = current.parentElement;
+                }
+                return { found: false };
+              }).catch(() => ({ found: false }));
+              
+              if (clickableParentInfo && 'found' in clickableParentInfo && clickableParentInfo.found && 'tag' in clickableParentInfo) {
+                // Try to construct a selector for the parent
+                let parentSelector = clickableParentInfo.tag;
+                if (clickableParentInfo.id && clickableParentInfo.id.length > 1) {
+                  parentSelector = clickableParentInfo.id;
+                } else if (clickableParentInfo.classes) {
+                  parentSelector = clickableParentInfo.classes.split(' ')[0]; // Use first class
+                }
+                
+                // Try to find it using the text as a filter
+                const parentLocator = page.locator(`${parentSelector}:has-text("${manifest.startButton.text}")`);
+                const parentCount = await parentLocator.count();
+                if (parentCount > 0) {
+                  const firstParent = parentLocator.first();
+                  await firstParent.waitFor({ state: 'visible', timeout: 5000 });
+                  logger.info('Start button found via text parent element', {
+                    text: manifest.startButton.text,
+                    selector: parentSelector,
+                  });
+                  return {
+                    locator: firstParent,
+                    method: 'manifest-text',
+                    selector: `parent:${parentSelector}`,
+                  };
+                }
+              }
+            } catch {
+              continue;
+            }
+          }
+        }
+      } catch {
+        // Ignore - this is a fallback
       }
     } catch (error) {
       logger.warn('Manifest text search failed, trying next strategy', {
@@ -265,13 +505,167 @@ export async function clickElement(
       selector: location.selector,
     });
 
-    await location.locator.click({ timeout: 10000 });
-    logger.info('Element clicked successfully', {
-      method: location.method,
-      selector: location.selector,
-    });
+    // Gather detailed element information for debugging
+    try {
+      const elementInfo: Record<string, unknown> = {};
+      
+      // Check if element exists
+      const count = await location.locator.count();
+      elementInfo.count = count;
+      
+      if (count === 0) {
+        logger.error('Element not found - count is 0', {
+          method: location.method,
+          selector: location.selector,
+        });
+        throw new BrowserError('Element not found (count is 0)');
+      }
 
-    return true;
+      // Get first element details
+      const firstLocator = location.locator.first();
+      
+      // Get visibility state
+      try {
+        const isVisible = await firstLocator.isVisible();
+        elementInfo.isVisible = isVisible;
+      } catch {
+        elementInfo.isVisible = 'unknown';
+      }
+
+      // Get bounding box (position and size)
+      try {
+        const boundingBox = await firstLocator.boundingBox();
+        elementInfo.boundingBox = boundingBox;
+      } catch {
+        elementInfo.boundingBox = 'not available';
+      }
+
+      // Get text content
+      try {
+        const textContent = await firstLocator.textContent();
+        elementInfo.textContent = textContent?.trim() || '(empty)';
+      } catch {
+        elementInfo.textContent = 'not available';
+      }
+
+      // Get tag name
+      try {
+        const tagName = await firstLocator.evaluate((el) => el.tagName.toLowerCase());
+        elementInfo.tagName = tagName;
+      } catch {
+        elementInfo.tagName = 'not available';
+      }
+
+      // Get element attributes
+      try {
+        const attributes = await firstLocator.evaluate((el) => {
+          const attrs: Record<string, string> = {};
+          for (const attr of el.attributes) {
+            attrs[attr.name] = attr.value;
+          }
+          return attrs;
+        });
+        elementInfo.attributes = attributes;
+      } catch {
+        elementInfo.attributes = 'not available';
+      }
+
+      // Check if element is enabled/disabled
+      try {
+        const isDisabled = await firstLocator.isDisabled();
+        elementInfo.isDisabled = isDisabled;
+      } catch {
+        elementInfo.isDisabled = 'not applicable';
+      }
+
+      // Check if element is in viewport
+      try {
+        const isInViewport = await firstLocator.evaluate((el) => {
+          const rect = el.getBoundingClientRect();
+          // Access window and document from browser context
+          const win = el.ownerDocument.defaultView;
+          const doc = el.ownerDocument;
+          if (!win || !doc) return false;
+          return (
+            rect.top >= 0 &&
+            rect.left >= 0 &&
+            rect.bottom <= (win.innerHeight || doc.documentElement.clientHeight) &&
+            rect.right <= (win.innerWidth || doc.documentElement.clientWidth)
+          );
+        });
+        elementInfo.isInViewport = isInViewport;
+      } catch {
+        elementInfo.isInViewport = 'unknown';
+      }
+
+      // Log all element details
+      logger.info('Element details before clicking:', elementInfo);
+      
+      // Also print a formatted summary
+      console.log('\n📋 ELEMENT DETAILS:');
+      console.log(`   Method: ${location.method}`);
+      console.log(`   Selector: ${location.selector}`);
+      console.log(`   Count: ${elementInfo.count}`);
+      console.log(`   Visible: ${elementInfo.isVisible}`);
+      console.log(`   Tag: ${elementInfo.tagName}`);
+      console.log(`   Text: "${elementInfo.textContent}"`);
+      console.log(`   In Viewport: ${elementInfo.isInViewport}`);
+      console.log(`   Disabled: ${elementInfo.isDisabled}`);
+      if (elementInfo.boundingBox && typeof elementInfo.boundingBox === 'object') {
+        const box = elementInfo.boundingBox as { x: number; y: number; width: number; height: number };
+        console.log(`   Position: x=${box.x}, y=${box.y}, width=${box.width}, height=${box.height}`);
+      }
+      console.log('');
+
+    } catch (infoError) {
+      logger.warn('Failed to gather element details', {
+        error: infoError instanceof Error ? infoError.message : String(infoError),
+      });
+    }
+
+    // Scroll element into view first to ensure it's visible
+    try {
+      await location.locator.scrollIntoViewIfNeeded({ timeout: 5000 });
+      logger.debug('Element scrolled into view');
+      
+      // Re-check bounding box after scrolling
+      try {
+        const boundingBox = await location.locator.first().boundingBox();
+        logger.info('Element position after scrolling', { boundingBox });
+      } catch {
+        // Ignore
+      }
+    } catch (scrollError) {
+      logger.warn('Failed to scroll element into view', {
+        error: scrollError instanceof Error ? scrollError.message : String(scrollError),
+      });
+      // Continue anyway - might still be clickable
+    }
+
+    // Small delay to ensure element is fully rendered after scrolling
+    await new Promise(resolve => setTimeout(resolve, 300));
+
+    // Try normal click first
+    try {
+      await location.locator.click({ timeout: 10000 });
+      logger.info('Element clicked successfully', {
+        method: location.method,
+        selector: location.selector,
+      });
+      return true;
+    } catch (clickError) {
+      // If normal click fails, try force click
+      logger.warn('Normal click failed, trying force click', {
+        error: clickError instanceof Error ? clickError.message : String(clickError),
+      });
+      
+      await location.locator.click({ timeout: 10000, force: true });
+      logger.info('Element force clicked successfully', {
+        method: location.method,
+        selector: location.selector,
+      });
+      return true;
+    }
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     logger.error('Failed to click element', {
@@ -329,7 +723,7 @@ export async function detectGameState(
         totalChecks++;
         try {
           const locator = page.locator(`text="${text}"`);
-          const count = await locator.count({ timeout: 2000 });
+          const count = await locator.count();
           if (count > 0) {
             matches++;
           }
@@ -345,7 +739,7 @@ export async function detectGameState(
         totalChecks++;
         try {
           const locator = page.locator(selector);
-          const count = await locator.count({ timeout: 2000 });
+          const count = await locator.count();
           if (count > 0) {
             matches++;
           }

@@ -39,3 +39,5 @@ temp/
 
 *.md
 !_docs/*
+
+placeholder-manifest.json
