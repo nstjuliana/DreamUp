@@ -64,22 +64,55 @@ export class BrowserClient {
       // Try to extract session ID for live viewing
       // Stagehand may expose this through the browser context or internal properties
       try {
-        // Try to get session ID from Stagehand's internal browser context
+        // Method 1: Try to get from browser context
         // @ts-ignore - accessing internal property that may exist
         const browserContext = this.page.context();
         // @ts-ignore - Browserbase may attach session info
-        const sessionInfo = browserContext?._browserbaseSessionId || browserContext?.sessionId;
+        let sessionInfo = browserContext?._browserbaseSessionId || browserContext?.sessionId;
+        
+        // Method 2: Try to get from Stagehand instance properties
+        if (!sessionInfo) {
+          // @ts-ignore - Stagehand may expose session ID
+          sessionInfo = this.stagehand?.sessionId || this.stagehand?._sessionId || null;
+        }
+        
+        // Method 3: Try to extract from browser context's browser instance
+        if (!sessionInfo && browserContext) {
+          // @ts-ignore - Browser instance may have session info
+          const browser = browserContext.browser();
+          if (browser) {
+            // @ts-ignore
+            sessionInfo = browser._sessionId || browser.sessionId || null;
+          }
+        }
+        
+        // Method 4: Try to get from page URL (Browserbase sessions sometimes expose it)
+        if (!sessionInfo) {
+          try {
+            const pageUrl = this.page.url();
+            // Browserbase session URLs might contain session ID
+            const sessionMatch = pageUrl.match(/session[_-]?id[=:]([a-zA-Z0-9_-]+)/i);
+            if (sessionMatch && sessionMatch[1]) {
+              sessionInfo = sessionMatch[1];
+            }
+          } catch {
+            // Ignore URL extraction errors
+          }
+        }
         
         if (sessionInfo) {
           this.sessionId = String(sessionInfo);
+          logger.debug('Session ID extracted successfully', { sessionId: this.sessionId });
         } else {
-          // Alternative: try to get from Stagehand instance
-          // @ts-ignore - Stagehand may expose session ID
-          this.sessionId = this.stagehand.sessionId || this.stagehand._sessionId || null;
+          this.sessionId = null;
+          logger.debug('Session ID not found - will need to use Browserbase dashboard');
         }
-      } catch {
+      } catch (error) {
         // Session ID extraction failed - not critical
         this.sessionId = null;
+        logger.debug('Session ID extraction failed', {
+          error: error instanceof Error ? error.message : String(error),
+        });
       }
       
       // Set default timeout
@@ -93,13 +126,28 @@ export class BrowserClient {
       });
       
       if (sessionUrl) {
-        logger.info('\n🌐 LIVE BROWSER VIEW AVAILABLE 🌐');
-        logger.info(`Watch the browser in real-time: ${sessionUrl}`);
-        logger.info('(Copy and paste this URL in your browser to view)\n');
+        logger.info('\n' + '='.repeat(60));
+        logger.info('🌐 LIVE BROWSER VIEW AVAILABLE 🌐');
+        logger.info('='.repeat(60));
+        logger.info(`\nWatch the browser in real-time:\n${sessionUrl}\n`);
+        logger.info('📋 Instructions:');
+        logger.info('   1. Copy the URL above');
+        logger.info('   2. Open it in your web browser');
+        logger.info('   3. You\'ll see the browser session in real-time');
+        logger.info('='.repeat(60) + '\n');
       } else {
-        logger.info('\n💡 TIP: To view the browser live, check your Browserbase dashboard:');
-        logger.info('   https://www.browserbase.com/sessions');
-        logger.info('   (Look for the most recent session)\n');
+        logger.info('\n' + '='.repeat(60));
+        logger.info('💡 HOW TO VIEW LIVE BROWSER SESSION');
+        logger.info('='.repeat(60));
+        logger.info('\nSession ID auto-detection failed, but you can still view it:');
+        logger.info('\n📋 Method 1: Browserbase Dashboard');
+        logger.info('   1. Go to: https://www.browserbase.com/sessions');
+        logger.info('   2. Log in to your Browserbase account');
+        logger.info('   3. Find the most recent session (it should be running now)');
+        logger.info('   4. Click on it to view live');
+        logger.info('\n📋 Method 2: Check Browser Logs');
+        logger.info('   The session ID may appear in verbose logs if DEBUG=true');
+        logger.info('='.repeat(60) + '\n');
       }
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
