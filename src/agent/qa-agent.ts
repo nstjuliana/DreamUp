@@ -118,9 +118,13 @@ export class QAAgent {
       const testPromise = this.executeTest(state, params);
 
       // Race between test execution and timeout
-      const result = await Promise.race([testPromise, timeoutPromise]);
+      const testResult = await Promise.race([testPromise, timeoutPromise]);
+      
+      // Extract state and result (timeout returns just result, test returns both)
+      const updatedState = 'state' in testResult ? testResult.state : state;
+      const result = 'state' in testResult ? testResult.result : testResult;
 
-      const duration_ms = Date.now() - state.startTime;
+      const duration_ms = Date.now() - updatedState.startTime;
 
       logger.info('QA test completed', {
         testId: state.testId,
@@ -130,7 +134,7 @@ export class QAAgent {
 
       // Try to save to database (don't fail if this fails)
       try {
-        await this.saveResultsToDatabase(state, result, params);
+        await this.saveResultsToDatabase(updatedState, result, params);
       } catch (dbError) {
         logger.error('Failed to save results to database', {
           testId: state.testId,
@@ -198,13 +202,13 @@ export class QAAgent {
    * 
    * @param {AgentState} state - Agent state
    * @param {QAAgentRunParams} params - Test parameters
-   * @returns {Promise<TestResult>} Test result
+   * @returns {Promise<{state: AgentState, result: TestResult}>} Updated state and test result
    * @private
    */
   private async executeTest(
     state: AgentState,
     params: QAAgentRunParams
-  ): Promise<TestResult> {
+  ): Promise<{state: AgentState, result: TestResult}> {
     let currentState = state;
 
     try {
@@ -225,20 +229,52 @@ export class QAAgent {
       currentState = updatePhase(currentState, 'loading');
       currentState = addTimelineEvent(currentState, 'page_load_start', 'Navigating to game URL', { url: currentState.gameUrl });
       logger.info('Loading game', { testId: currentState.testId, gameUrl: currentState.gameUrl });
+      const pageLoadStartTime = Date.now();
       await this.browserClient.loadGame(currentState.gameUrl);
-
-      // Wait for initial render
+      
+      // Wait for initial render with intelligent detection
       const loadingDuration = currentState.manifest?.loadingDuration || DEFAULT_LOADING_DURATION_MS;
       logger.info('Waiting for game to load', { testId: currentState.testId, duration: loadingDuration });
       await this.browserClient.waitForLoad(loadingDuration);
-      currentState = addTimelineEvent(currentState, 'page_load_complete', 'Page finished loading', { duration: loadingDuration });
+      const pageLoadActualDuration = Date.now() - pageLoadStartTime;
+      currentState = addTimelineEvent(currentState, 'page_load_complete', 'Page finished loading', { 
+        configuredDuration: loadingDuration,
+        actualDuration: pageLoadActualDuration 
+      });
 
       // Capture baseline screenshot
       logger.info('Capturing baseline screenshot', { testId: currentState.testId });
-      const baselineScreenshot = await captureScreenshot(this.browserClient, currentState.testId, 0);
-      if (baselineScreenshot) {
-        currentState = addScreenshot(currentState, baselineScreenshot);
-        currentState = addTimelineEvent(currentState, 'screenshot_captured', 'Baseline screenshot captured', { index: 0 });
+      currentState = addTimelineEvent(currentState, 'screenshot_captured', 'Starting baseline screenshot capture');
+      const screenshotStartTime = Date.now();
+      
+      // Capture screenshot buffer first
+      const { captureScreenshotBuffer } = await import('../browser/screenshot-capture.js');
+      const buffer = await captureScreenshotBuffer(this.browserClient, currentState.testId, 0);
+      const captureDuration = Date.now() - screenshotStartTime;
+      
+      if (buffer) {
+        currentState = addTimelineEvent(currentState, 'screenshot_captured', 'Screenshot buffer captured', { 
+          index: 0,
+          captureDurationMs: captureDuration,
+          bufferSize: buffer.length
+        });
+        
+        // Upload screenshot
+        const uploadStartTime = Date.now();
+        const { uploadScreenshot } = await import('../storage/file-storage.js');
+        const baselineScreenshot = await uploadScreenshot(buffer, currentState.testId, 0);
+        const uploadDuration = Date.now() - uploadStartTime;
+        
+        if (baselineScreenshot) {
+          currentState = addScreenshot(currentState, baselineScreenshot);
+          currentState = addTimelineEvent(currentState, 'screenshot_captured', 'Baseline screenshot uploaded', { 
+            index: 0, 
+            url: baselineScreenshot,
+            captureDurationMs: captureDuration,
+            uploadDurationMs: uploadDuration,
+            totalDurationMs: Date.now() - screenshotStartTime
+          });
+        }
       }
 
       // Phase 4: Interaction
@@ -312,7 +348,8 @@ export class QAAgent {
       currentState = addTimelineEvent(currentState, 'test_complete', 'Test execution completed (early exit for testing)');
       currentState = finalizeState(currentState);
       logger.info('Test execution stopped early (start button testing mode)', { testId: currentState.testId });
-      return createSuccessResult(
+      
+      const earlyResult = createSuccessResult(
         {
           screenshots: currentState.screenshots,
           console_logs: null,
@@ -322,6 +359,8 @@ export class QAAgent {
           playability_score: 0,
         }
       );
+      
+      return { state: currentState, result: earlyResult };
 
       // Simulate gameplay
       const gameplayDuration = getGameplayDuration(currentState.manifest || null, 45000); // Default 45s
@@ -376,7 +415,7 @@ export class QAAgent {
       currentState = finalizeState(currentState);
       logger.info('Test execution completed successfully', { testId: currentState.testId });
 
-      return createSuccessResult(
+      const successResult = createSuccessResult(
         {
           screenshots: currentState.screenshots,
           console_logs: currentState.consoleLogsUrl || null,
@@ -386,6 +425,8 @@ export class QAAgent {
           playability_score: evaluationResult.playabilityScore,
         }
       );
+      
+      return { state: currentState, result: successResult };
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       logger.error('Test execution failed', {
@@ -396,10 +437,12 @@ export class QAAgent {
       currentState = addTimelineEvent(currentState, 'error', `Error: ${message}`, { phase: currentState.phase });
       currentState = setError(currentState, message);
 
-      return createErrorResult(message, {
+      const errorResult = createErrorResult(message, {
         screenshots: currentState.screenshots,
         console_logs: currentState.consoleLogsUrl || null,
       });
+      
+      return { state: currentState, result: errorResult };
     }
   }
 

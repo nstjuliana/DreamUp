@@ -26,6 +26,11 @@ const ARTIFACTS_BUCKET = 'artifacts';
 let storageClient: SupabaseClient | null = null;
 
 /**
+ * Cache for bucket existence check to avoid repeated checks.
+ */
+let bucketExistsChecked = false;
+
+/**
  * Initialize storage client.
  * 
  * Creates a Supabase client configured for storage operations.
@@ -49,11 +54,17 @@ function getStorageClient(): SupabaseClient {
  * 
  * Checks if the artifacts bucket exists and creates it if needed.
  * Bucket is configured for public access to allow direct URL access.
+ * Uses caching to avoid repeated checks - only checks once per process.
  * 
  * @returns {Promise<void>}
  * @throws {StorageError} If bucket creation fails
  */
 export async function ensureBucketExists(): Promise<void> {
+  // Cache check to avoid repeated API calls
+  if (bucketExistsChecked) {
+    return;
+  }
+  
   const client = getStorageClient();
   
   try {
@@ -79,6 +90,9 @@ export async function ensureBucketExists(): Promise<void> {
       
       logger.info('Artifacts bucket created', { bucket: ARTIFACTS_BUCKET });
     }
+    
+    // Mark as checked after successful check or creation
+    bucketExistsChecked = true;
   } catch (error) {
     if (error instanceof StorageError) {
       throw error;
