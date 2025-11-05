@@ -18,10 +18,10 @@ import type { ConsoleLogEntry } from '../browser/console-logger.js';
 import type { TestResult } from '../cli/output-formatter.js';
 import { createSuccessResult, createErrorResult, createTimeoutResult, outputTimeline } from '../cli/output-formatter.js';
 import { LLMEvaluator } from '../evaluation/llm-evaluator.js';
-import { parseManifest, getGameplayDuration, getScreenshotIntervals } from '../utils/manifest-parser.js';
+import { parseManifest, getGameplayDuration, getScreenshotIntervals, getGameplayGoal, getAiDecisionInterval } from '../utils/manifest-parser.js';
 import { createAgentState, updatePhase, addScreenshot, setConsoleLogsUrl, setError, finalizeState, addTimelineEvent } from './agent-state.js';
 import type { AgentState } from './agent-state.js';
-import type { ManifestData } from '../storage/types.js';
+import type { ManifestData, GameUpdate } from '../storage/types.js';
 import { saveTestRun, getDatabase } from '../storage/database.js';
 import { QAAgentError } from '../utils/errors.js';
 import { logger } from '../utils/logger.js';
@@ -343,25 +343,6 @@ export class QAAgent {
         currentState = addTimelineEvent(currentState, 'screenshot_captured', 'Post-click screenshot captured', { index: 1 });
       }
 
-      // TEMPORARY: Early return for unit testing start button functionality
-      // Remove this return statement to re-enable full testing flow
-      currentState = addTimelineEvent(currentState, 'test_complete', 'Test execution completed (early exit for testing)');
-      currentState = finalizeState(currentState);
-      logger.info('Test execution stopped early (start button testing mode)', { testId: currentState.testId });
-      
-      const earlyResult = createSuccessResult(
-        {
-          screenshots: currentState.screenshots,
-          console_logs: null,
-          issues: [],
-        },
-        {
-          playability_score: 0,
-        }
-      );
-      
-      return { state: currentState, result: earlyResult };
-
       // Simulate gameplay
       const gameplayDuration = getGameplayDuration(currentState.manifest || null, 45000); // Default 45s
       await this.simulateGameplay(currentState, gameplayDuration);
@@ -371,13 +352,13 @@ export class QAAgent {
       const screenshotIntervals = getScreenshotIntervals(currentState.manifest || null);
       
       if (screenshotIntervals) {
-        // Time-based screenshot capture
-        currentState = await this.captureScreenshotsTimeBased(currentState, screenshotIntervals);
+        // Time-based screenshot capture (null check above ensures non-null)
+        currentState = await this.captureScreenshotsTimeBased(currentState, screenshotIntervals as number[]);
       } else {
         // Event-based: capture final screenshot
         const finalScreenshot = await captureScreenshot(this.browserClient, currentState.testId, currentState.screenshots.length);
         if (finalScreenshot) {
-          currentState = addScreenshot(currentState, finalScreenshot);
+          currentState = addScreenshot(currentState, finalScreenshot as string);
         }
       }
 
@@ -447,7 +428,42 @@ export class QAAgent {
   }
 
   /**
-   * Simulate gameplay by pressing keys.
+   * Build AI gameplay prompt for Stagehand.
+   * 
+   * Constructs a concise prompt for the AI to guide gameplay decisions.
+   * Stagehand's act() method already sees the screenshot, so we only need
+   * to provide essential context: game type, controls, and goal.
+   * 
+   * @param {string} gameType - Type of game (puzzle, platformer, etc.)
+   * @param {string[]} controls - Available control keys from manifest
+   * @param {string} goal - Gameplay goal/objective
+   * @returns {string} Concise prompt for AI action
+   * @private
+   */
+  private buildGameplayPrompt(
+    gameType: string,
+    controls: string[],
+    goal: string
+  ): string {
+    let prompt = `Play this ${gameType} game. `;
+    prompt += `Goal: ${goal}. `;
+    
+    if (controls.length > 0) {
+      prompt += `Use these controls: ${controls.join(', ')}.`;
+    } else {
+      prompt += `Use mouse controls.`;
+    }
+    
+    return prompt;
+  }
+
+  /**
+   * Simulate gameplay using AI-powered decision making.
+   * 
+   * Uses Stagehand's act() to intelligently play the game based on manifest controls
+   * and gameplay goals. Stagehand's act() method uses visual understanding from
+   * screenshots, so we provide only essential context (game type, controls, goal).
+   * The AI makes decisions at regular intervals and executes actions accordingly.
    * 
    * @param {AgentState} state - Agent state
    * @param {number} durationMs - Duration to simulate gameplay in milliseconds
@@ -455,34 +471,114 @@ export class QAAgent {
    */
   private async simulateGameplay(state: AgentState, durationMs: number): Promise<void> {
     const page = this.browserClient.getPage();
+    
+    // Extract game context from manifest
+    const gameType = state.manifest?.gameType || 'other';
     const controls = state.manifest?.controls || {
       primary: ['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Space'],
     };
+    const gameplayGoal = getGameplayGoal(state.manifest || null);
+    const aiDecisionInterval = getAiDecisionInterval(state.manifest || null);
 
-    logger.info('Simulating gameplay', {
+    logger.info('Starting AI-powered gameplay simulation', {
       testId: state.testId,
       duration: durationMs,
+      gameType,
       controls: controls.primary,
+      gameplayGoal,
+      aiDecisionInterval,
     });
 
     const startTime = Date.now();
-    const keyPressInterval = 500; // Press a key every 500ms
-    let keyIndex = 0;
+    let decisionCount = 0;
 
+    // AI decision loop - runs until duration expires
     while (Date.now() - startTime < durationMs) {
-      const key = controls.primary[keyIndex % controls.primary.length];
+      const elapsedTime = Date.now() - startTime;
+      const remainingTime = durationMs - elapsedTime;
+      
       try {
-        await page.keyboard.press(key);
-        await new Promise(resolve => setTimeout(resolve, keyPressInterval));
-        keyIndex++;
-      } catch (error) {
-        logger.warn('Key press failed', {
+        decisionCount++;
+        logger.info(`AI decision cycle ${decisionCount}`, {
           testId: state.testId,
-          key,
+          elapsedMs: elapsedTime,
+          remainingMs: remainingTime,
+        });
+
+        // Build concise action prompt - Stagehand's act() sees the screenshot visually
+        const actionPrompt = this.buildGameplayPrompt(
+          gameType,
+          controls.primary,
+          gameplayGoal
+        );
+
+        logger.debug('AI action prompt', {
+          testId: state.testId,
+          prompt: actionPrompt,
+        });
+
+        // Execute AI action - Stagehand uses visual understanding from screenshot
+        try {
+          await page.act(actionPrompt);
+          
+          logger.info('AI action executed successfully', {
+            testId: state.testId,
+            decisionNumber: decisionCount,
+          });
+        } catch (actError) {
+          // Fallback: If AI action fails, press a random control key
+          logger.warn('AI action failed, falling back to keyboard control', {
+            testId: state.testId,
+            error: actError instanceof Error ? actError.message : String(actError),
+          });
+
+          if (controls.primary.length > 0) {
+            // Pick a random key from available controls
+            const randomIndex = Math.floor(Math.random() * controls.primary.length);
+            const randomKey = controls.primary[randomIndex];
+            
+            if (randomKey) {
+              try {
+                await page.keyboard.press(randomKey);
+                logger.info('Fallback keyboard action executed', {
+                  testId: state.testId,
+                  key: randomKey,
+                });
+              } catch (keyError) {
+                logger.error('Fallback keyboard action also failed', {
+                  testId: state.testId,
+                  key: randomKey,
+                  error: keyError instanceof Error ? keyError.message : String(keyError),
+                });
+              }
+            }
+          }
+        }
+
+        // Step 4: Wait for next decision interval (or remaining time, whichever is shorter)
+        const waitTime = Math.min(aiDecisionInterval, remainingTime);
+        if (waitTime > 0) {
+          await new Promise(resolve => setTimeout(resolve, waitTime));
+        }
+
+      } catch (error) {
+        // Catch any unexpected errors in decision loop
+        logger.error('Error in AI gameplay decision loop', {
+          testId: state.testId,
+          decisionNumber: decisionCount,
           error: error instanceof Error ? error.message : String(error),
         });
+        
+        // Wait a bit before trying again to avoid rapid error loops
+        await new Promise(resolve => setTimeout(resolve, 1000));
       }
     }
+
+    logger.info('AI gameplay simulation completed', {
+      testId: state.testId,
+      totalDecisions: decisionCount,
+      totalDuration: Date.now() - startTime,
+    });
   }
 
   /**
@@ -504,6 +600,8 @@ export class QAAgent {
     
     for (let i = 0; i < intervals.length; i++) {
       const interval = intervals[i];
+      if (interval === undefined) continue;
+      
       const elapsed = Date.now() - startTime;
       const waitTime = Math.max(0, interval - elapsed);
       
@@ -580,10 +678,19 @@ export class QAAgent {
 
       // Update last_tested_at timestamp
       const db = getDatabase();
-      await db
+      const gameUpdate: GameUpdate = { last_tested_at: new Date().toISOString() };
+      const updateResult = await db
         .from('games')
-        .update({ last_tested_at: new Date().toISOString() })
+        // @ts-expect-error - Supabase type inference issue with partial updates
+        .update(gameUpdate)
         .eq('id', params.gameId);
+      
+      if (updateResult.error) {
+        logger.warn('Failed to update last_tested_at timestamp', {
+          testId: state.testId,
+          error: updateResult.error.message,
+        });
+      }
 
       logger.info('Test results saved to database', { testId: state.testId });
       

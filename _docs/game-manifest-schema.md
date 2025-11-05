@@ -32,6 +32,9 @@ interface GameManifest {
   gameStates?: GameState[];
   
   loadingDuration?: number;  // Expected loading time in milliseconds
+  gameplayDuration?: number;  // Gameplay simulation duration in milliseconds
+  gameplayGoal?: string;  // Custom goal for AI gameplay (e.g., "Collect as many coins as possible")
+  aiDecisionInterval?: number;  // Milliseconds between AI decisions during gameplay (default 2000ms)
   notes?: string;  // Special instructions or context for the QA agent
 }
 
@@ -322,6 +325,9 @@ interface RequiredAction {
     }
   ],
   "loadingDuration": 3000,
+  "gameplayDuration": 60000,
+  "gameplayGoal": "Progress as far as possible through the level while collecting coins",
+  "aiDecisionInterval": 2000,
   "notes": "Wait 2 seconds after clicking play button. Character selection screen appears before gameplay."
 }
 ```
@@ -366,6 +372,9 @@ interface RequiredAction {
       ]
     }
   ],
+  "gameplayDuration": 30000,
+  "gameplayGoal": "Click the cookie as many times as possible to maximize score",
+  "aiDecisionInterval": 1000,
   "notes": "No explicit start button - game starts immediately. Main interaction is clicking the cookie."
 }
 ```
@@ -498,6 +507,31 @@ Game states represent distinct phases in the game flow:
 - **Selection states**: Character/class selection, level selection
 - **Gameplay states**: Actual gameplay, different levels/stages
 - **End states**: Game over, victory screen
+
+### AI Gameplay Configuration
+
+The QA agent uses AI to intelligently play games during testing. Two optional fields control this behavior:
+
+**`gameplayGoal`** (string, optional):
+- Custom objective for the AI to pursue during gameplay
+- Examples: "Collect as many coins as possible", "Reach the highest level", "Survive as long as possible"
+- Default (if not specified): "Keep playing as long as possible without dying or losing"
+- The AI uses this goal to make strategic decisions about which actions to take
+
+**`aiDecisionInterval`** (number, optional):
+- Milliseconds between AI decision cycles during gameplay
+- Default: 2000ms (2 seconds)
+- Lower values = more frequent AI decisions (slower, more costly, but potentially more intelligent)
+- Higher values = less frequent AI decisions (faster, cheaper, but potentially less responsive)
+- The AI will observe the game state and make a decision at each interval
+
+**Example:**
+```json
+{
+  "gameplayGoal": "Collect as many points as possible while avoiding obstacles",
+  "aiDecisionInterval": 1500
+}
+```
 
 ## Usage in QA Agent
 
