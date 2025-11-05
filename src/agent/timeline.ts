@@ -25,6 +25,7 @@ export type TimelineEventType =
   | 'screenshot_captured'
   | 'start_button_search_start'
   | 'start_button_found'
+  | 'start_button_not_found'
   | 'start_button_clicked'
   | 'console_logs_collected'
   | 'gameplay_start'
