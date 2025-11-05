@@ -170,12 +170,6 @@ export interface ManifestData {
     mouse?: boolean;
     mouseActions?: ('click' | 'drag' | 'scroll')[];
   };
-  startButton?: {
-    selector?: string;
-    text?: string;
-    position?: string;
-    waitAfterClick?: number;
-  };
   gameStates?: GameState[];
   loadingDuration?: number;
   screenshotIntervals?: number[]; // Time-based screenshot intervals (ms)

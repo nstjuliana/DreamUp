@@ -12,6 +12,7 @@
 
 import type { BrowserClient } from './browser-client.js';
 import type { Page } from '@browserbasehq/stagehand';
+import type { ManifestData } from '../storage/types.js';
 import { captureScreenshot } from './screenshot-capture.js';
 import { BrowserError } from '../utils/errors.js';
 import { logger } from '../utils/logger.js';
@@ -259,7 +260,7 @@ export async function findStartButton(
  * 
  * @example
  * ```typescript
- * const location = await findStartButton(client, manifest);
+ * const location = await findStartButton(client);
  * if (location.element) {
  *   await clickElement(client, location);
  * }

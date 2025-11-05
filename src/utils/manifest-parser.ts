@@ -237,7 +237,6 @@ export function parseManifest(manifestData: Json): ManifestData {
           )
         : undefined,
     },
-    startButton,
     gameStates,
     loadingDuration: typeof manifest.loadingDuration === 'number' ? manifest.loadingDuration : undefined,
     screenshotIntervals: Array.isArray(manifest.screenshotIntervals)
@@ -251,7 +250,6 @@ export function parseManifest(manifestData: Json): ManifestData {
 
   logger.debug('Manifest parsed successfully', {
     gameType: parsed.gameType,
-    hasStartButton: !!parsed.startButton,
     gameStateCount: parsed.gameStates?.length || 0,
   });
 
