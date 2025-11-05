@@ -11,7 +11,6 @@
  */
 
 import type { BrowserClient } from './browser-client.js';
-import type { ManifestData } from '../storage/types.js';
 import type { Page } from '@browserbasehq/stagehand';
 import { captureScreenshot } from './screenshot-capture.js';
 import { BrowserError } from '../utils/errors.js';
@@ -151,23 +150,21 @@ async function captureStartButtonFailure(
  * descriptive queries. If no button is found, captures detailed failure
  * information including screenshots and all buttons on the page.
  * 
- * Ignores manifest data - relies entirely on AI detection.
+ * Relies entirely on AI detection - no manifest configuration needed.
  * 
  * @param {BrowserClient} client - Browser client instance
- * @param {ManifestData | null} manifest - Ignored (kept for backwards compatibility)
  * @returns {Promise<ElementLocation>} Element location result
  * 
  * @example
  * ```typescript
- * const location = await findStartButton(client, manifest);
+ * const location = await findStartButton(client);
  * if (location.element) {
  *   await clickElement(client, location);
  * }
  * ```
  */
 export async function findStartButton(
-  client: BrowserClient,
-  manifest: ManifestData | null
+  client: BrowserClient
 ): Promise<ElementLocation> {
   const page = client.getPage();
   const testId = 'unknown'; // Will be passed from caller in future

@@ -111,7 +111,6 @@ The game has a manifest with the following configuration:
 - **Game Type**: ${manifest.gameType}
 - **Controls**: ${manifest.controls.primary.join(', ')}${manifest.controls.secondary ? ` (secondary: ${manifest.controls.secondary.join(', ')})` : ''}
 - **Mouse Support**: ${manifest.controls.mouse ? 'Yes' : 'No'}
-${manifest.startButton ? `- **Start Button**: ${manifest.startButton.selector || manifest.startButton.text || 'Configured'}` : ''}
 
 Use this context to better understand what the game should be doing and whether it's functioning correctly.
 

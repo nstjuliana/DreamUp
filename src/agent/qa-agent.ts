@@ -290,7 +290,7 @@ export class QAAgent {
       
       // Find and click start button using StageHand AI
       currentState = addTimelineEvent(currentState, 'start_button_search_start', 'Searching for start button using Stagehand AI');
-      const startButtonLocation = await findStartButton(this.browserClient, currentState.manifest || null);
+      const startButtonLocation = await findStartButton(this.browserClient);
       
       if (!startButtonLocation.element) {
         // Start button not found - this is a critical failure
@@ -339,9 +339,8 @@ export class QAAgent {
       await clickElement(this.browserClient, startButtonLocation);
       currentState = addTimelineEvent(currentState, 'start_button_clicked', 'Start button clicked successfully');
 
-      // Wait after clicking start button
-      const waitAfterClick = currentState.manifest?.startButton?.waitAfterClick || START_BUTTON_WAIT_MS;
-      await new Promise(resolve => setTimeout(resolve, waitAfterClick));
+      // Wait after clicking start button (AI-detected buttons need time to transition)
+      await new Promise(resolve => setTimeout(resolve, START_BUTTON_WAIT_MS));
 
       // Capture screenshot after start click
       const afterStartScreenshot = await captureScreenshot(this.browserClient, currentState.testId, 1);

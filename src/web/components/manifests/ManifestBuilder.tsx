@@ -23,7 +23,7 @@ import {
 } from '@/components/ui/card'
 import { Separator } from '@/components/ui/separator'
 import { Badge } from '@/components/ui/badge'
-import { GAME_TYPES, KEYBOARD_KEYS, MOUSE_ACTIONS, START_BUTTON_POSITIONS } from '@/lib/constants'
+import { GAME_TYPES, KEYBOARD_KEYS, MOUSE_ACTIONS } from '@/lib/constants'
 import type { ManifestData } from '@/lib/types'
 
 interface ManifestBuilderProps {
@@ -39,20 +39,6 @@ export function ManifestBuilder({ initialData, onSave, isSubmitting }: ManifestB
   const [useMouse, setUseMouse] = useState<boolean>(initialData?.controls.mouse || false)
   const [mouseActions, setMouseActions] = useState<string[]>(
     initialData?.controls.mouseActions || []
-  )
-
-  // Start button config
-  const [startButtonSelector, setStartButtonSelector] = useState<string>(
-    initialData?.startButton?.selector || ''
-  )
-  const [startButtonText, setStartButtonText] = useState<string>(
-    initialData?.startButton?.text || ''
-  )
-  const [startButtonPosition, setStartButtonPosition] = useState<string>(
-    initialData?.startButton?.position || 'center'
-  )
-  const [startButtonWait, setStartButtonWait] = useState<number>(
-    initialData?.startButton?.waitAfterClick || 2000
   )
 
   // Gameplay config
@@ -108,14 +94,6 @@ export function ManifestBuilder({ initialData, onSave, isSubmitting }: ManifestB
         mouse: useMouse,
         mouseActions: mouseActions.length > 0 ? (mouseActions as any) : undefined,
       },
-      startButton: startButtonSelector || startButtonText || startButtonPosition !== 'center'
-        ? {
-            selector: startButtonSelector || undefined,
-            text: startButtonText || undefined,
-            position: startButtonPosition as any,
-            waitAfterClick: startButtonWait,
-          }
-        : undefined,
       loadingDuration,
       gameplayDuration,
       gameplayGoal,
@@ -136,15 +114,6 @@ export function ManifestBuilder({ initialData, onSave, isSubmitting }: ManifestB
         mouse: useMouse,
         mouseActions: mouseActions.length > 0 ? mouseActions : undefined,
       },
-      startButton:
-        startButtonSelector || startButtonText
-          ? {
-              selector: startButtonSelector || undefined,
-              text: startButtonText || undefined,
-              position: startButtonPosition,
-              waitAfterClick: startButtonWait,
-            }
-          : undefined,
       loadingDuration,
       gameplayDuration,
       gameplayGoal,
@@ -287,70 +256,6 @@ export function ManifestBuilder({ initialData, onSave, isSubmitting }: ManifestB
                   ))}
                 </div>
               )}
-            </div>
-          </CardContent>
-        </Card>
-
-        {/* Start Button */}
-        <Card>
-          <CardHeader>
-            <CardTitle>Start Button Configuration</CardTitle>
-            <CardDescription>
-              Help the QA agent locate and click the start button
-            </CardDescription>
-          </CardHeader>
-          <CardContent className="space-y-4">
-            <div className="space-y-2">
-              <Label htmlFor="selector">CSS Selector (Optional)</Label>
-              <Input
-                id="selector"
-                placeholder="#start-button, .play-btn"
-                value={startButtonSelector}
-                onChange={(e) => setStartButtonSelector(e.target.value)}
-              />
-              <p className="text-xs text-muted-foreground">
-                Provide a CSS selector to directly locate the start button
-              </p>
-            </div>
-
-            <div className="space-y-2">
-              <Label htmlFor="button-text">Button Text (Optional)</Label>
-              <Input
-                id="button-text"
-                placeholder="Start Game, Play, Begin"
-                value={startButtonText}
-                onChange={(e) => setStartButtonText(e.target.value)}
-              />
-            </div>
-
-            <div className="space-y-2">
-              <Label htmlFor="position">Expected Position</Label>
-              <Select value={startButtonPosition} onValueChange={setStartButtonPosition}>
-                <SelectTrigger id="position">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  {START_BUTTON_POSITIONS.map((pos) => (
-                    <SelectItem key={pos} value={pos} className="capitalize">
-                      {pos}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-
-            <div className="space-y-2">
-              <Label htmlFor="wait">Wait After Click (ms)</Label>
-              <Input
-                id="wait"
-                type="number"
-                value={startButtonWait}
-                onChange={(e) => setStartButtonWait(parseInt(e.target.value) || 0)}
-                step={100}
-              />
-              <p className="text-xs text-muted-foreground">
-                Time to wait after clicking the start button before gameplay begins
-              </p>
             </div>
           </CardContent>
         </Card>

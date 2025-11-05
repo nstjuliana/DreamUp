@@ -187,23 +187,7 @@ export function parseManifest(manifestData: Json): ManifestData {
     });
   }
 
-  // Validate startButton if present
-  let startButton: ManifestData['startButton'] | undefined;
-  if (manifest.startButton) {
-    if (typeof manifest.startButton !== 'object') {
-      throw new ValidationError('Manifest startButton must be an object', {
-        startButton: manifest.startButton,
-      });
-    }
 
-    const sb = manifest.startButton as Record<string, unknown>;
-    startButton = {
-      selector: sb.selector as string | undefined,
-      text: sb.text as string | undefined,
-      position: sb.position as string | undefined,
-      waitAfterClick: sb.waitAfterClick as number | undefined,
-    };
-  }
 
   // Validate gameStates if present
   let gameStates: GameState[] | undefined;
@@ -315,18 +299,6 @@ export function validateControlsForGameType(manifest: ManifestData): boolean {
   }
 
   return true;
-}
-
-/**
- * Extract start button configuration from manifest.
- * 
- * Returns the start button configuration if available, or null if not specified.
- * 
- * @param {ManifestData} manifest - Parsed manifest data
- * @returns {ManifestData['startButton']} Start button config or null
- */
-export function getStartButtonConfig(manifest: ManifestData): ManifestData['startButton'] | null {
-  return manifest.startButton || null;
 }
 
 /**

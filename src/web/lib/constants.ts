@@ -60,11 +60,3 @@ export const KEYBOARD_KEYS = [
 
 export const MOUSE_ACTIONS = ['click', 'drag', 'scroll'] as const
 
-export const START_BUTTON_POSITIONS = [
-  'center',
-  'top',
-  'bottom',
-  'left',
-  'right',
-] as const
-
