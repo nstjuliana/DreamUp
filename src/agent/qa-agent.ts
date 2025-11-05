@@ -217,7 +217,14 @@ export class QAAgent {
       currentState = addTimelineEvent(currentState, 'browser_init_start', 'Starting browser session initialization');
       logger.info('Initializing browser session', { testId: currentState.testId });
       await this.browserClient.initializeSession();
-      currentState = addTimelineEvent(currentState, 'browser_init_complete', 'Browser session initialized');
+      
+      // Capture BrowserBase session URL for live viewing
+      const sessionUrl = this.browserClient.getSessionUrl();
+      const sessionId = this.browserClient.getSessionId();
+      currentState = addTimelineEvent(currentState, 'browser_init_complete', 'Browser session initialized', {
+        sessionUrl,
+        sessionId,
+      });
 
       // Phase 2: Set up console log collection
       logger.info('Setting up console log collection', { testId: currentState.testId });
@@ -658,6 +665,9 @@ export class QAAgent {
         gameId: params.gameId,
       });
 
+      // Get BrowserBase session URL if available
+      const sessionUrl = this.browserClient.getSessionUrl()
+      
       await saveTestRun({
         game_id: params.gameId,
         manifest_id: params.manifestId || null,
@@ -673,6 +683,8 @@ export class QAAgent {
           gameUrl: params.gameUrl,
           gameName: params.gameName,
           timeline: state.timeline.events as any,
+          browserbaseUrl: sessionUrl || null,
+          browserbaseSessionId: this.browserClient.getSessionId() || null,
         } as any,
       });
 
