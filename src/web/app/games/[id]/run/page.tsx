@@ -208,7 +208,7 @@ export default function RunTestPage() {
                   <SelectItem value="none">No Manifest (Default behavior)</SelectItem>
                   {manifests.map((manifest) => (
                     <SelectItem key={manifest.id} value={manifest.id}>
-                      Version {manifest.version_number || 'N/A'}
+                      Version {manifest.version_name || 'N/A'}
                       {manifest.is_active && ' (Active)'}
                       {manifest.manifest_data.notes &&
                         ` - ${manifest.manifest_data.notes.substring(0, 50)}...`}

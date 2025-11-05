@@ -96,8 +96,11 @@ export function ManifestBuilder({ initialData, onSave, isSubmitting }: ManifestB
   }
 
   const handleSubmit = () => {
+    // Determine version number - if editing, keep existing version, otherwise use 1.0
+    const versionNumber = initialData?.version || '1.0'
+    
     const manifestData: ManifestData = {
-      version: '1.0',
+      version: versionNumber,
       gameType: gameType as any,
       controls: {
         primary: primaryKeys,

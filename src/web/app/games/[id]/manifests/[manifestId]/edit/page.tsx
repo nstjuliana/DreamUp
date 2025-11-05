@@ -12,6 +12,38 @@ import { useToast } from '@/hooks/use-toast'
 import { LoadingSpinner } from '@/components/ui/loading-spinner'
 import type { ManifestData, GameManifest } from '@/lib/types'
 
+function calculateNextVersion(existingManifests: GameManifest[]): string {
+  if (existingManifests.length === 0) {
+    return 'v1.0'
+  }
+
+  // Extract version numbers from existing manifests
+  const versions = existingManifests
+    .map((m) => {
+      // Parse version_name like "v1.0", "v1.1", "v2.0", etc.
+      const match = m.version_name.match(/^v?(\d+)\.(\d+)$/i)
+      if (match) {
+        return { major: parseInt(match[1]), minor: parseInt(match[2]) }
+      }
+      return null
+    })
+    .filter((v): v is { major: number; minor: number } => v !== null)
+
+  if (versions.length === 0) {
+    return 'v1.0'
+  }
+
+  // Find the highest version
+  const highestVersion = versions.reduce((max, v) => {
+    if (v.major > max.major) return v
+    if (v.major === max.major && v.minor > max.minor) return v
+    return max
+  }, versions[0])
+
+  // Increment minor version
+  return `v${highestVersion.major}.${highestVersion.minor + 1}`
+}
+
 export default function EditManifestPage() {
   const router = useRouter()
   const params = useParams()
@@ -20,22 +52,30 @@ export default function EditManifestPage() {
   const [isLoading, setIsLoading] = useState(true)
   const [setAsActive, setSetAsActive] = useState(false)
   const [manifest, setManifest] = useState<GameManifest | null>(null)
+  const [existingManifests, setExistingManifests] = useState<GameManifest[]>([])
 
   const gameId = params.id as string
   const manifestId = params.manifestId as string
 
   useEffect(() => {
-    const fetchManifest = async () => {
+    const fetchData = async () => {
       try {
-        const response = await fetch(`/api/games/${gameId}/manifests/${manifestId}`)
-        if (!response.ok) {
-          throw new Error('Failed to fetch manifest')
-        }
-        const data = await response.json()
-        setManifest(data)
-        setSetAsActive(data.is_active)
+        const [manifestRes, manifestsRes] = await Promise.all([
+          fetch(`/api/games/${gameId}/manifests/${manifestId}`),
+          fetch(`/api/games/${gameId}/manifests`),
+        ])
+
+        if (!manifestRes.ok) throw new Error('Failed to fetch manifest')
+        if (!manifestsRes.ok) throw new Error('Failed to fetch manifests')
+
+        const manifestData = await manifestRes.json()
+        const manifestsData = await manifestsRes.json()
+
+        setManifest(manifestData)
+        setExistingManifests(manifestsData)
+        setSetAsActive(manifestData.is_active)
       } catch (error) {
-        console.error('Error fetching manifest:', error)
+        console.error('Error fetching data:', error)
         toast({
           title: 'Error',
           description: 'Failed to load manifest',
@@ -46,7 +86,7 @@ export default function EditManifestPage() {
       }
     }
 
-    fetchManifest()
+    fetchData()
   }, [gameId, manifestId, toast])
 
   const handleSave = async (manifestData: ManifestData) => {
@@ -89,15 +129,28 @@ export default function EditManifestPage() {
 
     setIsSubmitting(true)
     try {
+      // Calculate next version name
+      const nextVersionName = calculateNextVersion(existingManifests)
+      
+      // Extract version number from version_name (e.g., "v1.0" -> "1.0")
+      const versionMatch = nextVersionName.match(/^v?(\d+\.\d+)$/i)
+      const versionNumber = versionMatch ? versionMatch[1] : '1.0'
+      
+      const manifestData = manifest.manifest_data as ManifestData
+      const updatedManifestData: ManifestData = {
+        ...manifestData,
+        version: versionNumber,
+        notes: `Duplicated from version ${manifest.version_name || 'N/A'}. ${manifestData.notes || ''}`,
+      }
+      
       const response = await fetch(`/api/games/${gameId}/manifests`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          manifest_data: {
-            ...manifest.manifest_data,
-            notes: `Duplicated from version ${manifest.version_number || 'N/A'}. ${manifest.manifest_data.notes || ''}`,
-          },
+          version_name: nextVersionName,
+          manifest_data: updatedManifestData,
           is_active: false,
+          notes: updatedManifestData.notes || null,
         }),
       })
 
@@ -153,7 +206,7 @@ export default function EditManifestPage() {
           <div>
             <h1 className="text-3xl font-bold">Edit Manifest</h1>
             <p className="text-muted-foreground">
-              Version {manifest.version_number || 'N/A'}
+              Version {manifest.version_name || 'N/A'}
             </p>
           </div>
         </div>
