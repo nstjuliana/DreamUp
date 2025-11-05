@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { supabase } from '@/lib/supabase'
 import { QAAgent } from '@shared/agent/qa-agent'
+import { randomUUID } from 'crypto'
 
 // GET /api/games/[id]/test-runs - List test runs for a game
 export async function GET(
@@ -71,13 +72,16 @@ export async function POST(
       }
     }
 
-    // Create a test run record with 'in_progress' status
+    // Create a test run record with temporary 'error' status (will be updated when test completes)
+    // We use 'error' because 'in_progress' is not in the allowed status enum
+    const testRunId = randomUUID()
     const { data: testRun, error: testRunError } = await supabase
       .from('test_runs')
       .insert({
+        id: testRunId,
         game_id: params.id,
         manifest_id: manifestId && manifestId !== 'none' ? manifestId : null,
-        status: 'in_progress',
+        status: 'error', // Temporary - will be updated when test completes
         metadata: {
           startedAt: new Date().toISOString(),
         },
@@ -94,34 +98,22 @@ export async function POST(
     }
 
     // Execute the QA agent asynchronously
-    // We'll start it and return immediately with the test run ID and live view URL
+    // We'll start it and return immediately with the test run ID
     const agent = new QAAgent()
     
     // Execute in background (don't await)
-    agent.executeTest({
-      gameUrl: game.url,
+    agent.run({
+      gameUrl: game.game_url,
+      testId: testRunId,
+      gameId: params.id,
+      manifestId: manifestId && manifestId !== 'none' ? manifestId : null,
+      manifest: manifestData || null,
       gameName: game.name,
       gameType: game.game_type || undefined,
-      manifest: manifestData || undefined,
-    }).then(async (result) => {
-      // Update test run with results
-      await supabase
-        .from('test_runs')
-        .update({
-          status: result.status,
-          playability_score: result.playabilityScore,
-          issues: result.issues,
-          screenshots: result.screenshots,
-          console_logs: result.consoleLogs,
-          metadata: {
-            ...result.metadata,
-            testId: result.testId,
-            timeline: result.timeline,
-          },
-          execution_time_ms: result.executionTimeMs,
-          completed_at: new Date().toISOString(),
-        })
-        .eq('id', testRun.id)
+    }).then(async (agentResult) => {
+      // Test run is already updated by saveResultsToDatabase in the agent
+      // which checks if testId matches an existing test run and updates it
+      console.log('Test run completed', { testRunId, duration_ms: agentResult.duration_ms })
     }).catch(async (error) => {
       console.error('QA agent execution error:', error)
       // Update test run with error status
@@ -132,9 +124,8 @@ export async function POST(
           metadata: {
             error: error.message || 'Test execution failed',
           },
-          completed_at: new Date().toISOString(),
         })
-        .eq('id', testRun.id)
+        .eq('id', testRunId)
     })
 
     // Get the BrowserBase session URL
@@ -143,7 +134,7 @@ export async function POST(
     const liveViewUrl = null // Will be populated after browser init
 
     return NextResponse.json({
-      testRunId: testRun.id,
+      testRunId: testRunId,
       liveViewUrl,
       message: 'Test started successfully',
     })

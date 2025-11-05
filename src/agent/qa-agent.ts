@@ -23,7 +23,7 @@ import { createAgentState, updatePhase, addScreenshot, setConsoleLogsUrl, setErr
 import type { AgentState } from './agent-state.js';
 import type { ManifestData, GameUpdate } from '../storage/types.js';
 import { saveTestRun, getDatabase } from '../storage/database.js';
-import { QAAgentError } from '../utils/errors.js';
+import { QAAgentError, StorageError } from '../utils/errors.js';
 import { logger } from '../utils/logger.js';
 import { MAX_EXECUTION_TIME_MS, DEFAULT_LOADING_DURATION_MS, START_BUTTON_WAIT_MS } from '../utils/constants.js';
 import { decideNextAction, type GameContext } from './vision-action-planner.js';
@@ -138,7 +138,7 @@ export class QAAgent {
 
       // Try to save to database (don't fail if this fails)
       try {
-        await this.saveResultsToDatabase(updatedState, result, params);
+        await this.saveResultsToDatabase(updatedState, result, params, duration_ms);
       } catch (dbError) {
         logger.error('Failed to save results to database', {
           testId: state.testId,
@@ -180,7 +180,7 @@ export class QAAgent {
 
       // Try to save error result to database
       try {
-        await this.saveResultsToDatabase(errorState, errorResult, params);
+        await this.saveResultsToDatabase(errorState, errorResult, params, duration_ms);
       } catch (dbError) {
         logger.error('Failed to save error results to database', {
           testId: state.testId,
@@ -656,12 +656,14 @@ export class QAAgent {
    * @param {AgentState} state - Agent state
    * @param {TestResult} result - Test result
    * @param {QAAgentRunParams} params - Test parameters
+   * @param {number} durationMs - Test duration in milliseconds
    * @private
    */
   private async saveResultsToDatabase(
     state: AgentState,
     result: TestResult,
-    params: QAAgentRunParams
+    params: QAAgentRunParams,
+    durationMs: number
   ): Promise<void> {
     if (!params.gameId) {
       logger.warn('Cannot save to database - no gameId provided', { testId: state.testId });
@@ -677,28 +679,72 @@ export class QAAgent {
       // Browser session is local (no URL to capture)
       const sessionUrl = null;
       
-      await saveTestRun({
-        game_id: params.gameId,
-        manifest_id: params.manifestId || null,
-        status: result.status,
-        playability_score: result.playability_score,
-        issues: result.issues,
-        screenshots: result.screenshots,
-        console_logs: result.console_logs,
-        execution_method: 'cli',
-        duration_ms: result.duration_ms || null,
-        metadata: {
-          testId: state.testId,
-          gameUrl: params.gameUrl,
-          gameName: params.gameName,
-          timeline: state.timeline.events as any,
-          browserbaseUrl: null,
-          browserbaseSessionId: null,
-        } as any,
-      });
+      const db = getDatabase();
+      
+      // Check if a test run with this testId already exists (e.g., created by web API)
+      const { data: existingTestRun } = await db
+        .from('test_runs')
+        .select('id')
+        .eq('id', state.testId)
+        .single();
+      
+      const executionMethod = existingTestRun ? 'web' : 'cli';
+      
+      if (existingTestRun) {
+        // Update existing test run (created by web API)
+        logger.info('Updating existing test run', { testRunId: state.testId });
+        const { error: updateError } = await db
+          .from('test_runs')
+          .update({
+            status: result.status,
+            playability_score: result.playability_score,
+            issues: result.issues,
+            screenshots: result.screenshots,
+            console_logs: result.console_logs,
+            execution_method: executionMethod,
+            duration_ms: durationMs,
+            metadata: {
+              testId: state.testId,
+              gameUrl: params.gameUrl,
+              gameName: params.gameName,
+              timeline: state.timeline.events as any,
+              browserbaseUrl: null,
+              browserbaseSessionId: null,
+            } as any,
+          })
+          .eq('id', state.testId);
+        
+        if (updateError) {
+          logger.error('Failed to update existing test run', {
+            testId: state.testId,
+            error: updateError.message,
+          });
+          throw new StorageError(`Failed to update test run: ${updateError.message}`, { testId: state.testId, error: updateError });
+        }
+      } else {
+        // Create new test run (CLI execution)
+        await saveTestRun({
+          game_id: params.gameId,
+          manifest_id: params.manifestId || null,
+          status: result.status,
+          playability_score: result.playability_score,
+          issues: result.issues,
+          screenshots: result.screenshots,
+          console_logs: result.console_logs,
+          execution_method: executionMethod,
+          duration_ms: durationMs,
+          metadata: {
+            testId: state.testId,
+            gameUrl: params.gameUrl,
+            gameName: params.gameName,
+            timeline: state.timeline.events as any,
+            browserbaseUrl: null,
+            browserbaseSessionId: null,
+          } as any,
+        });
+      }
 
       // Update last_tested_at timestamp
-      const db = getDatabase();
       const gameUpdate: GameUpdate = { last_tested_at: new Date().toISOString() };
       const updateResult = await db
         .from('games')
