@@ -198,7 +198,7 @@
 ## Integration Tasks
 
 ### Task 1: Full End-to-End Test
-- Execute: `bun run qa.ts <game-url>`
+- Execute: `npx tsx qa.ts <game-url>`
 - Browser loads game
 - Agent finds and clicks start button
 - Agent simulates gameplay

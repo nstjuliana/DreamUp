@@ -6,7 +6,7 @@
 
 **Success Criteria**: 
 - Project structure exists and follows conventions
-- TypeScript/Bun environment is configured
+- TypeScript/Node.js environment is configured
 - Basic CLI can be executed
 - Environment variables can be loaded
 - Core module directories exist with placeholder files
@@ -29,17 +29,17 @@
 
 ---
 
-### 2. TypeScript and Bun Configuration
+### 2. TypeScript and Node.js Configuration
 
-**Goal**: Set up TypeScript with strict mode and Bun runtime configuration.
+**Goal**: Set up TypeScript with strict mode and Node.js runtime configuration.
 
 **Steps**:
-1. Initialize `package.json` with Bun as runtime, project metadata, and basic scripts
+1. Initialize `package.json` with Node.js as runtime, project metadata, and basic scripts
 2. Configure `tsconfig.json` with strict mode, proper module resolution, and output settings
-3. Install TypeScript types: `@types/node` (if needed for compatibility)
-4. Create `.bun` directory in `.gitignore` (cache directory)
+3. Install TypeScript execution tool: `npm install --save-dev tsx`
+4. Install TypeScript types: `npm install --save-dev @types/node`
 
-**Deliverable**: TypeScript compiles successfully with strict mode, Bun can execute TypeScript files
+**Deliverable**: TypeScript compiles successfully with strict mode, Node.js can execute TypeScript files via tsx
 
 ---
 
@@ -62,11 +62,11 @@
 **Goal**: Create a minimal CLI that can accept arguments but doesn't execute any logic yet.
 
 **Steps**:
-1. Install Commander.js: `bun add commander` and `@types/commander`
+1. Install Commander.js: `npm install commander` and `npm install --save-dev @types/commander`
 2. Create `src/cli/commands.ts` with basic command structure accepting game URL
 3. Create `src/cli/parser.ts` with argument parsing logic
 4. Create `qa.ts` entry point that initializes Commander and calls CLI module
-5. Test CLI with `bun run qa.ts --help` and `bun run qa.ts <url>`
+5. Test CLI with `npx tsx qa.ts --help` and `npx tsx qa.ts <url>`
 
 **Deliverable**: CLI accepts game URL argument and optional `--manifest` flag, displays help text
 
@@ -142,8 +142,8 @@
 
 ### Task 1: Verify CLI Integration
 - CLI entry point (`qa.ts`) imports and calls CLI module
-- Help command works: `bun run qa.ts --help`
-- URL argument parsing works: `bun run qa.ts https://example.com/game`
+- Help command works: `npx tsx qa.ts --help`
+- URL argument parsing works: `npx tsx qa.ts https://example.com/game`
 
 ### Task 2: Verify Module Imports
 - Each placeholder module can be imported without errors
@@ -161,7 +161,7 @@
 
 - [ ] Complete directory structure matches project-rules.md
 - [ ] TypeScript compiles with strict mode
-- [ ] Bun can execute `qa.ts` entry point
+- [ ] Node.js can execute `qa.ts` entry point via tsx
 - [ ] CLI accepts arguments and displays help
 - [ ] Database schema created in Supabase
 - [ ] Database types generated and imported

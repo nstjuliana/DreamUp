@@ -26,7 +26,7 @@
 4. Implement handler that extracts game URL from event payload
 5. Call `QAAgent.run()` from handler
 6. Return result in Lambda response format
-7. Create deployment script or instructions for bundling with `bun build`
+7. Create deployment script or instructions for bundling with `esbuild` or `webpack`
 
 **Deliverable**: Lambda function can be deployed and triggered with game URL
 
@@ -37,8 +37,8 @@
 **Goal**: Bundle TypeScript code for Lambda deployment and set up deployment process.
 
 **Steps**:
-1. Configure `bun build` or `esbuild` for Lambda bundling
-2. Create bundle script in `package.json` (e.g., `bun run build:lambda`)
+1. Configure `esbuild` or `webpack` for Lambda bundling
+2. Create bundle script in `package.json` (e.g., `npm run build:lambda`)
 3. Ensure bundle size is under Lambda limits (50 MB)
 4. Create deployment instructions/documentation
 5. Set up environment variables in Lambda configuration
