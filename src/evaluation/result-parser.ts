@@ -17,7 +17,7 @@ import { logger } from '../utils/logger.js';
  * Zod schema for LLM evaluation result.
  * 
  * Defines the expected structure of LLM evaluation responses.
- * Used with Vercel AI SDK's structured outputs feature.
+ * Used with OpenAI SDK's structured outputs (JSON schema) feature.
  */
 export const EvaluationResultSchema = z.object({
   status: z.enum(['pass', 'fail', 'error']),
@@ -154,5 +154,6 @@ export function createDefaultEvaluationResult(reason: string): ParsedEvaluationR
     reasoning: reason,
   };
 }
+
 
 

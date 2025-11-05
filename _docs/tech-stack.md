@@ -5,7 +5,7 @@
 **Runtime:** Node.js  
 **Database:** Supabase (PostgreSQL)  
 **File Storage:** Supabase Storage  
-**AI/LLM SDK:** Vercel AI SDK  
+**AI/LLM SDK:** OpenAI SDK  
 **Browser Automation:** Browserbase + Stagehand  
 **CLI Framework:** Commander.js  
 **Package Manager:** npm  
@@ -138,30 +138,31 @@ See `_docs/database-schema.md` for complete schema definition, relationships, in
 
 ---
 
-### AI/LLM SDK: Vercel AI SDK
+### AI/LLM SDK: OpenAI SDK
 
-**Decision:** Use Vercel AI SDK for LLM integration and game evaluation.
+**Decision:** Use OpenAI SDK for LLM integration and game evaluation.
 
 **Rationale:**
-- Recommended in project specification
-- Provider-agnostic (can switch between OpenAI, Anthropic, etc.)
-- Built-in support for structured outputs (JSON responses)
+- Official OpenAI SDK with comprehensive TypeScript support
+- Direct access to OpenAI models (GPT-4, GPT-3.5, etc.)
+- Built-in support for structured outputs (JSON responses via function calling)
 - Streaming support for real-time responses
-- Strong TypeScript support
+- Mature and well-documented SDK
+- Reliable and stable API
 
 **Best Practices:**
-- Use `ai` package from Vercel (`npm install ai`)
-- Implement structured outputs for consistent JSON responses
+- Use `openai` package (`npm install openai`)
+- Implement structured outputs using function calling for consistent JSON responses
 - Use environment variables for API keys (never commit)
 - Implement retry logic with exponential backoff
 - Cache LLM responses when possible (cost optimization)
 - Use streaming only if real-time updates needed (otherwise batch)
 
 **Limitations:**
-- Relatively new project (smaller community than direct provider SDKs)
-- Some advanced provider features may not be available
-- Requires understanding of provider-specific configurations
+- Provider-specific (OpenAI only, not provider-agnostic)
+- Requires OpenAI API key
 - Token usage tracking requires manual implementation
+- Some advanced features may require specific model versions
 
 **Important Considerations:**
 - Monitor API costs closely (set budget alerts)
@@ -339,7 +340,7 @@ See `_docs/database-schema.md` for complete schema definition, relationships, in
 - Full-stack framework with API routes
 - Server-side rendering for better performance
 - TypeScript-first approach
-- Easy deployment to Vercel or AWS
+- Easy deployment to AWS or other platforms
 
 **Best Practices:**
 - Use App Router (Next.js 13+ pattern)
@@ -365,10 +366,8 @@ SUPABASE_SERVICE_ROLE_KEY=
 BROWSERBASE_API_KEY=
 BROWSERBASE_PROJECT_ID=
 
-# LLM Provider (e.g., OpenAI)
+# LLM Provider (OpenAI)
 OPENAI_API_KEY=
-# or
-ANTHROPIC_API_KEY=
 
 # AWS Lambda (if needed)
 AWS_REGION=

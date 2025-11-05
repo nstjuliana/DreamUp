@@ -237,10 +237,15 @@ export class BrowserClient {
   /**
    * Wait for page to be fully loaded.
    * 
-   * Waits for the page to reach a stable state with network idle.
-   * This ensures the game has finished loading before capturing evidence.
+   * Intelligently waits for the page to be ready using a multi-stage approach:
+   * 1. Wait for DOM content to be loaded (fast)
+   * 2. Wait for a short network idle period (max 2s) or game container visibility
+   * 3. Apply additional wait time if specified
    * 
-   * @param {number} [waitMs=5000] - Additional milliseconds to wait after load
+   * This approach is faster and more reliable than waiting for full network idle,
+   * which can take 30+ seconds for games with polling or WebSocket connections.
+   * 
+   * @param {number} [waitMs=3000] - Additional milliseconds to wait after load
    * @returns {Promise<void>}
    * @throws {BrowserError} If waiting fails
    * 
@@ -249,33 +254,123 @@ export class BrowserClient {
    * await client.waitForLoad(3000);
    * ```
    */
-  async waitForLoad(waitMs: number = 5000): Promise<void> {
+  async waitForLoad(waitMs: number = 3000): Promise<void> {
     if (!this.page) {
       throw new BrowserError('Browser session not initialized');
     }
     
     try {
       logger.debug('Waiting for page to be ready', { waitMs });
+      const startTime = Date.now();
       
-      // Wait for network to be idle
-      await this.page.waitForLoadState('networkidle', {
-        timeout: 30000,
+      // Stage 1: Wait for DOM content to be loaded (fast, usually < 1s)
+      await this.page.waitForLoadState('domcontentloaded', {
+        timeout: 5000,
       }).catch(() => {
-        // Ignore timeout - page might have ongoing animations/polling
-        logger.debug('Network idle timeout - continuing anyway');
+        logger.debug('DOM content load timeout - continuing anyway');
       });
       
-      // Additional wait for game initialization
+      const domLoadTime = Date.now() - startTime;
+      logger.debug('DOM content loaded', { elapsedMs: domLoadTime });
+      
+      // Stage 2: Try to detect game container/canvas visibility (fastest path)
+      // This is more reliable than network idle for games
+      const gameReady = await this.detectGameReady(2000).catch(() => false);
+      
+      if (gameReady) {
+        const gameReadyTime = Date.now() - startTime;
+        logger.debug('Game container detected as ready', { elapsedMs: gameReadyTime });
+      } else {
+        // Fallback: Wait for a short network idle period (max 2s)
+        // This is much shorter than the default 30s timeout
+        await this.page.waitForLoadState('networkidle', {
+          timeout: 2000,
+        }).catch(() => {
+          logger.debug('Short network idle timeout - page likely ready anyway');
+        });
+      }
+      
+      const preWaitTime = Date.now() - startTime;
+      logger.debug('Page load detection complete', { elapsedMs: preWaitTime });
+      
+      // Stage 3: Additional wait for game initialization (if specified)
       if (waitMs > 0) {
         await new Promise(resolve => setTimeout(resolve, waitMs));
       }
       
-      logger.debug('Page is ready');
+      const totalTime = Date.now() - startTime;
+      logger.debug('Page is ready', { totalElapsedMs: totalTime });
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       logger.warn('Wait for load completed with errors', { error: message });
       // Don't throw - page might be usable even if not fully loaded
     }
+  }
+  
+  /**
+   * Detect if game container/canvas is ready and visible.
+   * 
+   * Checks for common game container selectors and canvas elements to
+   * determine if the game has loaded, which is faster than waiting for
+   * network idle.
+   * 
+   * @param {number} timeoutMs - Maximum time to wait for game container
+   * @returns {Promise<boolean>} True if game container detected
+   * @private
+   */
+  private async detectGameReady(timeoutMs: number): Promise<boolean> {
+    if (!this.page) {
+      return false;
+    }
+    
+    const startTime = Date.now();
+    const gameSelectors = [
+      'section.scene', // Game engine scene container (prioritized)
+      'section[class*="scene"]', // Variations of scene class
+      'canvas',
+      '#game',
+      '#game-container',
+      '#game-canvas',
+      '.game',
+      '.game-container',
+      '.game-canvas',
+      '[id*="game"]',
+      '[class*="game"]',
+      '#play-area',
+      '#game-area',
+      '.play-area',
+      '.game-area',
+    ];
+    
+    // Check each selector with a short timeout
+    for (const selector of gameSelectors) {
+      try {
+        const locator = this.page.locator(selector).first();
+        const count = await locator.count();
+        
+        if (count > 0) {
+          // Check if element is visible and has reasonable size
+          const box = await locator.boundingBox({ timeout: 1000 }).catch(() => null);
+          if (box && box.width > 100 && box.height > 100) {
+            // Wait for it to be visible
+            await locator.waitFor({ state: 'visible', timeout: 1000 }).catch(() => {});
+            const elapsed = Date.now() - startTime;
+            logger.debug('Game container detected', { selector, elapsedMs: elapsed });
+            return true;
+          }
+        }
+      } catch {
+        // Continue to next selector
+        continue;
+      }
+      
+      // Check timeout
+      if (Date.now() - startTime > timeoutMs) {
+        break;
+      }
+    }
+    
+    return false;
   }
   
   /**
@@ -298,6 +393,28 @@ export class BrowserClient {
       throw new BrowserError('Browser session not initialized');
     }
     return this.page;
+  }
+
+  /**
+   * Get the Stagehand instance.
+   * 
+   * Returns the Stagehand instance for AI-powered browser operations
+   * like observe() and act().
+   * 
+   * @returns {Stagehand} Stagehand instance
+   * @throws {BrowserError} If no active session
+   * 
+   * @example
+   * ```typescript
+   * const stagehand = client.getStagehand();
+   * const buttons = await stagehand.page.observe("Find the start button");
+   * ```
+   */
+  getStagehand(): Stagehand {
+    if (!this.stagehand) {
+      throw new BrowserError('Browser session not initialized');
+    }
+    return this.stagehand;
   }
   
   /**

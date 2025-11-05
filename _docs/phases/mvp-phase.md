@@ -20,7 +20,7 @@
 **Goal**: Initialize browser session and load game URL with Browserbase and Stagehand.
 
 **Steps**:
-1. Install dependencies: `bun add @browserbasehq/stagehand`
+1. Install dependencies: `npm install @browserbasehq/stagehand`
 2. Create `src/browser/browser-client.ts` with `BrowserClient` class
 3. Implement `initializeSession()` method to create Browserbase session
 4. Implement `loadGame(url: string)` method to navigate to game URL
@@ -114,7 +114,7 @@
 
 **Note for MVP**: Games/manifests will be created manually in database for testing. Web UI for game creation comes in Stretch Phase.
 
-**Deliverable**: CLI command `bun run qa.ts <game-url>` looks up game and executes agent
+**Deliverable**: CLI command `npx tsx qa.ts <game-url>` looks up game and executes agent
 
 ---
 
@@ -151,7 +151,7 @@
 ## Integration Tasks
 
 ### Task 1: End-to-End Flow Test
-- Execute: `bun run qa.ts https://example-game.com`
+- Execute: `npx tsx qa.ts https://example-game.com`
 - Browser loads game successfully
 - Screenshot is captured and saved
 - Console logs are collected

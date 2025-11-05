@@ -16,52 +16,34 @@ import { BrowserError } from '../utils/errors.js';
 import { logger } from '../utils/logger.js';
 
 /**
- * Capture screenshot from browser and upload to storage.
+ * Capture screenshot buffer from browser (without uploading).
  * 
- * Uses a multi-strategy approach to capture only the game content area:
- * 1. **Game container selectors**: Tries common CSS selectors like #game, .game-container,
- *    #game-canvas, etc. Validates that the container is reasonably sized (>100x100px).
- *    Prioritized for DOM-based games.
- * 2. **Iframes**: Targets iframe elements (most common for embedded games). If multiple
- *    iframes exist, selects the largest one. Attempts to capture the iframe's content frame.
- * 3. **Canvas elements**: Targets HTML5 canvas elements (common for HTML5 games). If multiple
- *    canvases exist, selects the largest one.
- * 4. **Full page fallback**: If no game content is found, captures the entire page viewport.
- * 
- * Converts the screenshot to a buffer and uploads it to Supabase Storage. Returns the
- * public URL of the uploaded screenshot. Handles failures gracefully - logs error and
- * returns null rather than throwing to avoid breaking the test flow.
+ * Uses a multi-strategy approach to capture only the game content area.
+ * Returns the screenshot buffer without uploading to storage.
  * 
  * @param {BrowserClient} client - Active browser client instance
  * @param {string} testId - Unique test run identifier
  * @param {number} [index=0] - Screenshot index for ordering
- * @returns {Promise<string | null>} Public URL of screenshot or null if failed
- * 
- * @example
- * ```typescript
- * const url = await captureScreenshot(browserClient, 'test-123', 0);
- * if (url) {
- *   console.log(`Screenshot captured: ${url}`);
- * }
- * ```
+ * @returns {Promise<Buffer | null>} Screenshot buffer or null if failed
  */
-export async function captureScreenshot(
+export async function captureScreenshotBuffer(
   client: BrowserClient,
   testId: string,
   index: number = 0
-): Promise<string | null> {
+): Promise<Buffer | null> {
   try {
+    const captureStartTime = Date.now();
     logger.info('Capturing screenshot', { testId, index });
     
     // Get the page from browser client
     const page = client.getPage();
     
-    // Create a timeout promise to prevent hanging (15 seconds)
-    // Playwright may wait for fonts to load, which can cause delays
+    // Create a timeout promise to prevent hanging (10 seconds, reduced from 15)
+    // Playwright may wait for fonts to load, but we don't want to wait too long
     const timeoutPromise = new Promise<never>((_, reject) => {
       setTimeout(() => {
-        reject(new Error('Screenshot timeout after 15 seconds (likely waiting for fonts)'));
-      }, 15000);
+        reject(new Error('Screenshot timeout after 10 seconds'));
+      }, 10000);
     });
     
     // Multi-strategy approach to find game content:
@@ -76,6 +58,8 @@ export async function captureScreenshot(
     if (!strategySucceeded) {
       try {
         const gameContainerSelectors = [
+          'section.scene', // Game engine scene container (prioritized)
+          'section[class*="scene"]', // Variations of scene class
           '#game',
           '#game-container',
           '#game-canvas',
@@ -115,13 +99,13 @@ export async function captureScreenshot(
         }
         
         if (gameContainer) {
-          await gameContainer.waitFor({ state: 'visible', timeout: 5000 }).catch(() => {
+          await gameContainer.waitFor({ state: 'visible', timeout: 2000 }).catch(() => {
             logger.debug('Game container visibility timeout, proceeding anyway', { testId });
           });
           
           const screenshotPromise = gameContainer.screenshot({
             type: 'png',
-            timeout: 15000,
+            timeout: 5000,
             animations: 'disabled',
           });
           
@@ -193,8 +177,8 @@ export async function captureScreenshot(
             iframeLocator = page.locator('iframe').first();
           }
           
-          // Wait for iframe to be attached to the page
-          await iframeLocator.waitFor({ state: 'attached', timeout: 5000 }).catch(() => {
+          // Wait for iframe to be attached to the page (reduced timeout)
+          await iframeLocator.waitFor({ state: 'attached', timeout: 2000 }).catch(() => {
             logger.debug('Iframe attachment timeout, proceeding anyway', { testId });
           });
           
@@ -204,55 +188,83 @@ export async function captureScreenshot(
           
           // Try to capture iframe content frame first (if available)
           if (iframeFrame && iframeFrame !== page.mainFrame()) {
-            // Wait for iframe content to be loaded
+            // Wait for iframe content to be loaded (reduced timeout)
             try {
-              await iframeFrame.waitForLoadState('domcontentloaded', { timeout: 5000 });
+              await iframeFrame.waitForLoadState('domcontentloaded', { timeout: 2000 });
             } catch {
               logger.debug('Iframe load state timeout, proceeding anyway', { testId });
             }
             
-            // Try to capture screenshot of iframe's content frame
-            // Note: Frame.screenshot() might not be available in all Playwright versions
+            // First try: Capture canvas inside iframe (most reliable for game engines)
             try {
-              // Check if screenshot method exists on frame
-              if (typeof iframeFrame.screenshot === 'function') {
-                const screenshotPromise = iframeFrame.screenshot({
+              const canvasInFrame = iframeFrame.locator('canvas').first();
+              const canvasCount = await canvasInFrame.count({ timeout: 1000 }).catch(() => 0);
+              
+              if (canvasCount > 0) {
+                logger.info('Canvas found inside iframe, capturing canvas', { testId, index });
+                const canvasScreenshotPromise = canvasInFrame.screenshot({
                   type: 'png',
-                  timeout: 15000,
+                  timeout: 5000,
                   animations: 'disabled',
                 });
                 
                 screenshotBuffer = await Promise.race([
-                  screenshotPromise,
+                  canvasScreenshotPromise,
                   timeoutPromise,
                 ]);
                 
-                logger.info('Screenshot captured from iframe content frame', { testId, index });
+                logger.info('Screenshot captured from canvas inside iframe', { testId, index });
                 strategySucceeded = true;
-              } else {
-                logger.debug('Frame.screenshot() not available, will try iframe element', { testId });
               }
-            } catch (frameScreenshotError) {
-              // Frame.screenshot() failed or not available, try iframe element instead
-              logger.debug('Frame screenshot failed, will try iframe element', {
+            } catch (canvasError) {
+              logger.debug('Canvas inside iframe capture failed, trying frame screenshot', {
                 testId,
-                error: frameScreenshotError instanceof Error ? frameScreenshotError.message : String(frameScreenshotError),
+                error: canvasError instanceof Error ? canvasError.message : String(canvasError),
               });
+            }
+            
+            // Second try: Capture screenshot of iframe's content frame
+            if (!strategySucceeded) {
+              try {
+                // Check if screenshot method exists on frame
+                if (typeof iframeFrame.screenshot === 'function') {
+                  const screenshotPromise = iframeFrame.screenshot({
+                    type: 'png',
+                    timeout: 5000,
+                    animations: 'disabled',
+                  });
+                  
+                  screenshotBuffer = await Promise.race([
+                    screenshotPromise,
+                    timeoutPromise,
+                  ]);
+                  
+                  logger.info('Screenshot captured from iframe content frame', { testId, index });
+                  strategySucceeded = true;
+                } else {
+                  logger.debug('Frame.screenshot() not available, will try iframe element', { testId });
+                }
+              } catch (frameScreenshotError) {
+                // Frame.screenshot() failed or not available, try iframe element instead
+                logger.debug('Frame screenshot failed, will try iframe element', {
+                  testId,
+                  error: frameScreenshotError instanceof Error ? frameScreenshotError.message : String(frameScreenshotError),
+                });
+              }
             }
           }
           
           // If frame screenshot didn't work, try capturing the iframe element itself
+          // Skip visibility check - iframe might be "not visible" but still renderable
           if (!strategySucceeded) {
-            logger.debug('Capturing iframe element directly', { testId });
-            
-            await iframeLocator.waitFor({ state: 'visible', timeout: 5000 }).catch(() => {
-              logger.debug('Iframe visibility timeout, proceeding anyway', { testId });
-            });
+            logger.debug('Capturing iframe element directly (skipping visibility check)', { testId });
             
             try {
+              // Don't wait for visibility - just try to capture the iframe element
+              // Many games use iframes that Playwright marks as "not visible" but are still renderable
               const screenshotPromise = iframeLocator.screenshot({
                 type: 'png',
-                timeout: 15000,
+                timeout: 5000,
                 animations: 'disabled',
               });
               
@@ -264,12 +276,40 @@ export async function captureScreenshot(
               logger.info('Screenshot captured from iframe element', { testId, index });
               strategySucceeded = true;
             } catch (iframeElementError) {
-              // Iframe element capture also failed, will try next strategy
-              logger.debug('Iframe element capture failed', {
+              // Iframe element capture also failed, try capturing canvas inside iframe
+              logger.debug('Iframe element capture failed, trying canvas inside iframe', {
                 testId,
                 error: iframeElementError instanceof Error ? iframeElementError.message : String(iframeElementError),
               });
-              throw iframeElementError; // Re-throw to trigger outer catch and move to next strategy
+              
+              // Last resort: try to find canvas inside iframe content frame (if not already tried)
+              if (iframeFrame && iframeFrame !== page.mainFrame() && !strategySucceeded) {
+                try {
+                  const canvasInFrame = iframeFrame.locator('canvas').first();
+                  const canvasCount = await canvasInFrame.count({ timeout: 1000 }).catch(() => 0);
+                  
+                  if (canvasCount > 0) {
+                    const canvasScreenshotPromise = canvasInFrame.screenshot({
+                      type: 'png',
+                      timeout: 5000,
+                      animations: 'disabled',
+                    });
+                    
+                    screenshotBuffer = await Promise.race([
+                      canvasScreenshotPromise,
+                      timeoutPromise,
+                    ]);
+                    
+                    logger.info('Screenshot captured from canvas inside iframe (fallback)', { testId, index });
+                    strategySucceeded = true;
+                  }
+                } catch (canvasError) {
+                  logger.debug('Canvas inside iframe capture failed', {
+                    testId,
+                    error: canvasError instanceof Error ? canvasError.message : String(canvasError),
+                  });
+                }
+              }
             }
           }
         }
@@ -327,13 +367,13 @@ export async function captureScreenshot(
             canvasLocator = page.locator('canvas').first();
           }
           
-          await canvasLocator.waitFor({ state: 'visible', timeout: 5000 }).catch(() => {
+          await canvasLocator.waitFor({ state: 'visible', timeout: 2000 }).catch(() => {
             logger.debug('Canvas visibility timeout, proceeding anyway', { testId });
           });
           
           const screenshotPromise = canvasLocator.screenshot({
             type: 'png',
-            timeout: 15000,
+            timeout: 5000,
             animations: 'disabled',
           });
           
@@ -361,7 +401,7 @@ export async function captureScreenshot(
       const screenshotPromise = page.screenshot({
         type: 'png',
         fullPage: false,
-        timeout: 15000,
+        timeout: 5000,
         animations: 'disabled',
       });
       
@@ -373,11 +413,75 @@ export async function captureScreenshot(
     
     // Convert to Buffer if it's a Uint8Array
     const buffer = Buffer.from(screenshotBuffer);
+    const captureDuration = Date.now() - captureStartTime;
+    
+    logger.info('Screenshot buffer created', { 
+      testId, 
+      index, 
+      bufferSize: buffer.length,
+      captureDurationMs: captureDuration 
+    });
+    
+    return buffer;
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    logger.error('Failed to capture screenshot buffer', {
+      testId,
+      index,
+      error: message,
+    });
+    
+    return null;
+  }
+}
+
+/**
+ * Capture screenshot from browser and upload to storage.
+ * 
+ * Uses captureScreenshotBuffer internally and then uploads to storage.
+ * Returns the public URL of the uploaded screenshot.
+ * 
+ * @param {BrowserClient} client - Active browser client instance
+ * @param {string} testId - Unique test run identifier
+ * @param {number} [index=0] - Screenshot index for ordering
+ * @returns {Promise<string | null>} Public URL of screenshot or null if failed
+ */
+export async function captureScreenshot(
+  client: BrowserClient,
+  testId: string,
+  index: number = 0
+): Promise<string | null> {
+  try {
+    const captureStartTime = Date.now();
+    
+    // Capture screenshot buffer
+    const buffer = await captureScreenshotBuffer(client, testId, index);
+    if (!buffer) {
+      return null;
+    }
+    
+    const captureDuration = Date.now() - captureStartTime;
+    logger.info('Screenshot buffer created, uploading to storage', { 
+      testId, 
+      index, 
+      bufferSize: buffer.length,
+      captureDurationMs: captureDuration 
+    });
     
     // Upload to Supabase Storage
+    const uploadStartTime = Date.now();
     const url = await uploadScreenshot(buffer, testId, index);
+    const uploadDuration = Date.now() - uploadStartTime;
     
-    logger.info('Screenshot captured and uploaded', { testId, index, url });
+    const totalDuration = Date.now() - captureStartTime;
+    logger.info('Screenshot captured and uploaded', { 
+      testId, 
+      index, 
+      url, 
+      captureDurationMs: captureDuration,
+      uploadDurationMs: uploadDuration,
+      totalDurationMs: totalDuration
+    });
     return url;
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
@@ -387,7 +491,6 @@ export async function captureScreenshot(
       error: message,
     });
     
-    // Return null rather than throwing - screenshot failure shouldn't fail entire test
     return null;
   }
 }

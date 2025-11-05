@@ -521,7 +521,6 @@ export interface Config {
     projectId: string;
   };
   llm: {
-    provider: 'openai' | 'anthropic';
     apiKey: string;
   };
 }
@@ -576,7 +575,6 @@ export function loadConfig(): Config {
 
 - ❌ `.env` and `.env.local` (secrets)
 - ❌ `node_modules/`
-- ❌ `.bun/` (Bun cache - legacy, not used)
 - ❌ `artifacts/` (generated files, unless `.gitkeep`)
 - ❌ Build outputs
 

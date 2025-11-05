@@ -178,7 +178,7 @@ See `_docs/game-manifest-schema.md` for complete schema with examples.
 | **Database** | Supabase (PostgreSQL) | Games, manifests, test results |
 | **File Storage** | Supabase Storage | Screenshots, console logs |
 | **Browser Automation** | Browserbase + Stagehand | Headless browser control |
-| **AI/LLM** | Vercel AI SDK | Game evaluation |
+| **AI/LLM** | OpenAI SDK | Game evaluation |
 | **CLI** | Commander.js | Command-line interface |
 | **Web UI** | Next.js (App Router) | Game/manifest management (stretch) |
 | **Language** | TypeScript (strict mode) | Type-safe codebase |

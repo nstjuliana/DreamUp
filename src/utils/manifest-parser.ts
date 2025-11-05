@@ -260,6 +260,8 @@ export function parseManifest(manifestData: Json): ManifestData {
       ? (manifest.screenshotIntervals as number[]).filter((i: unknown) => typeof i === 'number')
       : undefined,
     gameplayDuration: typeof manifest.gameplayDuration === 'number' ? manifest.gameplayDuration : undefined,
+    gameplayGoal: typeof manifest.gameplayGoal === 'string' ? manifest.gameplayGoal : undefined,
+    aiDecisionInterval: typeof manifest.aiDecisionInterval === 'number' ? manifest.aiDecisionInterval : undefined,
     notes: typeof manifest.notes === 'string' ? manifest.notes : undefined,
   };
 
@@ -333,12 +335,12 @@ export function getStartButtonConfig(manifest: ManifestData): ManifestData['star
  * Returns the gameplay duration specified in the manifest, or a default
  * duration (30-60 seconds) if not specified.
  * 
- * @param {ManifestData} manifest - Parsed manifest data
+ * @param {ManifestData | null} manifest - Parsed manifest data or null
  * @param {number} defaultDurationMs - Default duration in milliseconds
  * @returns {number} Gameplay duration in milliseconds
  */
-export function getGameplayDuration(manifest: ManifestData, defaultDurationMs: number = 45000): number {
-  if (manifest.gameplayDuration && manifest.gameplayDuration > 0) {
+export function getGameplayDuration(manifest: ManifestData | null, defaultDurationMs: number = 45000): number {
+  if (manifest?.gameplayDuration && manifest.gameplayDuration > 0) {
     return manifest.gameplayDuration;
   }
   return defaultDurationMs;
@@ -350,13 +352,57 @@ export function getGameplayDuration(manifest: ManifestData, defaultDurationMs: n
  * Returns the screenshot intervals array if specified in manifest for
  * time-based capture, or null to use event-based capture.
  * 
- * @param {ManifestData} manifest - Parsed manifest data
+ * @param {ManifestData | null} manifest - Parsed manifest data or null
  * @returns {number[] | null} Screenshot intervals in milliseconds, or null for event-based
  */
-export function getScreenshotIntervals(manifest: ManifestData): number[] | null {
-  if (manifest.screenshotIntervals && manifest.screenshotIntervals.length > 0) {
+export function getScreenshotIntervals(manifest: ManifestData | null): number[] | null {
+  if (manifest?.screenshotIntervals && manifest.screenshotIntervals.length > 0) {
     return manifest.screenshotIntervals;
   }
   return null;
+}
+
+/**
+ * Get gameplay goal from manifest or return default.
+ * 
+ * Returns the custom gameplay goal specified in the manifest for AI-powered
+ * gameplay simulation, or a default goal if not specified.
+ * 
+ * @param {ManifestData | null} manifest - Parsed manifest data or null
+ * @returns {string} Gameplay goal for AI agent
+ * 
+ * @example
+ * ```typescript
+ * const goal = getGameplayGoal(manifest);
+ * console.log(`AI goal: ${goal}`);
+ * ```
+ */
+export function getGameplayGoal(manifest: ManifestData | null): string {
+  if (manifest?.gameplayGoal && manifest.gameplayGoal.trim().length > 0) {
+    return manifest.gameplayGoal;
+  }
+  return 'Keep playing as long as possible without dying or losing';
+}
+
+/**
+ * Get AI decision interval from manifest or return default.
+ * 
+ * Returns the AI decision interval (milliseconds between AI decisions during
+ * gameplay) specified in the manifest, or the default interval of 2000ms.
+ * 
+ * @param {ManifestData | null} manifest - Parsed manifest data or null
+ * @returns {number} AI decision interval in milliseconds
+ * 
+ * @example
+ * ```typescript
+ * const interval = getAiDecisionInterval(manifest);
+ * console.log(`AI will make decisions every ${interval}ms`);
+ * ```
+ */
+export function getAiDecisionInterval(manifest: ManifestData | null): number {
+  if (manifest?.aiDecisionInterval && manifest.aiDecisionInterval > 0) {
+    return manifest.aiDecisionInterval;
+  }
+  return 2000; // Default: 2 seconds
 }
 

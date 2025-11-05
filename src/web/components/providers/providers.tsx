@@ -1,0 +1,21 @@
+'use client'
+
+import { ThemeProvider } from './theme-provider'
+import { Header } from '@/components/layout/Header'
+import { Toaster } from '@/components/ui/toaster'
+
+export function Providers({ children }: { children: React.ReactNode }) {
+  return (
+    <ThemeProvider
+      attribute="class"
+      defaultTheme="system"
+      enableSystem
+      disableTransitionOnChange
+    >
+      <Header />
+      {children}
+      <Toaster />
+    </ThemeProvider>
+  )
+}
+

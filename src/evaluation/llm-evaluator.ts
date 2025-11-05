@@ -3,20 +3,19 @@
  * 
  * LLM-based game evaluation.
  * 
- * This module handles evaluation of game playability using LLM models (OpenAI/Anthropic).
+ * This module handles evaluation of game playability using LLM models (OpenAI).
  * It constructs prompts with evidence (screenshots, console logs), sends them to the LLM,
- * and parses the evaluation results. Uses Vercel AI SDK with structured outputs.
+ * and parses the evaluation results. Uses official OpenAI SDK for multimodal queries.
  * 
  * @module LLMEvaluator
  */
 
-import { generateObject } from 'ai';
-import { openai } from '@ai-sdk/openai';
+import OpenAI from 'openai';
 import { EvaluationError } from '../utils/errors.js';
 import { logger } from '../utils/logger.js';
 import { getConfig } from '../utils/config.js';
 import { buildEvaluationPrompt, buildSystemMessage, summarizeConsoleLogs, formatScreenshotsForLLM } from './prompt-builder.js';
-import { parseEvaluationResponse, convertToTestStatus, createDefaultEvaluationResult, type ParsedEvaluationResult } from './result-parser.js';
+import { parseEvaluationResponse, convertToTestStatus, createDefaultEvaluationResult, type ParsedEvaluationResult, EvaluationResultSchema } from './result-parser.js';
 import { MAX_RETRY_ATTEMPTS, RETRY_BACKOFF_BASE_MS } from '../utils/constants.js';
 
 /**
@@ -73,12 +72,21 @@ export interface EvaluationResult {
  */
 export class LLMEvaluator {
   private config: ReturnType<typeof getConfig>['llm'];
+  private openaiClient: OpenAI | null = null;
 
   /**
    * Create LLM evaluator instance.
    */
   constructor() {
     this.config = getConfig().llm;
+    
+    // Initialize OpenAI client if provider is OpenAI
+    if (this.config.provider === 'openai') {
+      this.openaiClient = new OpenAI({
+        apiKey: this.config.apiKey,
+      });
+    }
+    
     logger.debug('LLM Evaluator initialized', {
       provider: this.config.provider,
       model: this.config.model,
@@ -89,7 +97,7 @@ export class LLMEvaluator {
    * Evaluate game playability.
    * 
    * Sends evidence to LLM for analysis and returns structured evaluation.
-   * Uses Vercel AI SDK with structured outputs (Zod schema) for type-safe responses.
+   * Uses official OpenAI SDK with structured outputs (JSON schema) for type-safe responses.
    * Includes retry logic with exponential backoff.
    * 
    * @param {EvaluationEvidence} evidence - Evidence to evaluate
@@ -144,32 +152,109 @@ export class LLMEvaluator {
         // Determine model to use (default to gpt-4o for vision support)
         const modelName = this.config.model || 'gpt-4o';
 
-        // Import schema
-        const { EvaluationResultSchema } = await import('./result-parser.js');
+        if (!this.openaiClient) {
+          throw new Error('OpenAI client not initialized');
+        }
 
-        // Use Vercel AI SDK generateObject with structured outputs
-        // For vision models, use messages format with image inputs
-        const { object } = await generateObject({
-          model: openai(modelName, {
-            apiKey: this.config.apiKey,
-          }),
-          schema: EvaluationResultSchema,
-          messages: [
-            {
-              role: 'system' as const,
-              content: buildSystemMessage(),
-            },
-            {
-              role: 'user' as const,
-              content: imageInputs.length > 0
-                ? [
-                    { type: 'text' as const, text: prompt },
-                    ...imageInputs,
-                  ]
-                : prompt,
-            },
-          ],
+        // Build messages array for OpenAI API
+        const messages: OpenAI.Chat.Completions.ChatCompletionMessageParam[] = [];
+        
+        // Add system message
+        messages.push({
+          role: 'system',
+          content: buildSystemMessage() + '\n\nYou must respond with valid JSON only. No markdown, no code blocks, just raw JSON matching the expected schema.',
         });
+
+        // Build user message content
+        const userContent: Array<{ type: 'text'; text: string } | { type: 'image_url'; image_url: { url: string } }> = [];
+        
+        // Add text prompt
+        const jsonPrompt = `${prompt}\n\nIMPORTANT: Respond with ONLY valid JSON matching this schema. Do not include any markdown formatting, code blocks, or explanatory text - just the raw JSON object.`;
+        userContent.push({ type: 'text', text: jsonPrompt });
+        
+        // Add images if present (convert Buffer to base64 data URL)
+        if (imageInputs.length > 0) {
+          logger.debug('Adding images to multimodal request', { imageCount: imageInputs.length });
+          
+          for (const img of imageInputs) {
+            // Convert Buffer to base64 data URL
+            const base64Image = img.image.toString('base64');
+            // Determine MIME type (default to png, adjust if needed)
+            const mimeType = 'image/png'; // You could detect this from file extension if needed
+            const dataUrl = `data:${mimeType};base64,${base64Image}`;
+            
+            userContent.push({
+              type: 'image_url',
+              image_url: { url: dataUrl },
+            });
+          }
+        }
+
+        messages.push({
+          role: 'user',
+          content: userContent,
+        });
+
+        // Call OpenAI API with response_format for structured output
+        logger.debug('Calling OpenAI API', {
+          model: modelName,
+          hasImages: imageInputs.length > 0,
+          messageCount: messages.length,
+        });
+
+        const completion = await this.openaiClient.chat.completions.create({
+          model: modelName,
+          messages,
+          temperature: 0.3,
+          response_format: {
+            type: 'json_schema',
+            json_schema: {
+              name: 'evaluation_result',
+              description: 'Evaluation result for game playability',
+              schema: {
+                type: 'object',
+                properties: {
+                  status: {
+                    type: 'string',
+                    enum: ['pass', 'fail', 'error'],
+                  },
+                  playability_score: {
+                    type: 'number',
+                    minimum: 0,
+                    maximum: 100,
+                  },
+                  issues: {
+                    type: 'array',
+                    items: { type: 'string' },
+                  },
+                  reasoning: {
+                    type: 'string',
+                  },
+                },
+                required: ['status', 'playability_score', 'issues', 'reasoning'],
+                additionalProperties: false,
+              },
+            },
+          },
+        });
+
+        // Extract response content
+        const responseContent = completion.choices[0]?.message?.content;
+        if (!responseContent) {
+          throw new Error('No response content from OpenAI API');
+        }
+
+        // Parse JSON response
+        let object: any;
+        try {
+          object = JSON.parse(responseContent);
+        } catch (parseError) {
+          logger.error('Failed to parse JSON from OpenAI response', {
+            error: parseError instanceof Error ? parseError.message : String(parseError),
+            responsePreview: responseContent.substring(0, 200),
+          });
+          throw new Error(`Failed to parse JSON response: ${parseError instanceof Error ? parseError.message : String(parseError)}`);
+        }
 
         // Parse and validate response
         const parsed = parseEvaluationResponse(object);
