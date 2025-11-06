@@ -41,45 +41,50 @@ export class BrowserClient {
    * await client.initializeSession(stagehand.getPage(), stagehand.getContext());
    * ```
    */
-  async initializeSession(page: Page, context: any): Promise<void> {
+  async initializeSession(page?: Page, context?: any): Promise<void> {
     try {
-      logger.info('Initializing browser session from Stagehand page');
-      
-      // Use the page and context from Stagehand
-      this.page = page;
-      this.context = context;
-      
-      // Try to get browser from context if available
-      if (this.context && typeof this.context.browser === 'function') {
-        this.browser = this.context.browser();
-      }
-      
-      // Set viewport to fixed size for coordinate consistency
-      // Use try-catch in case the method is not available
-      try {
-        await this.page.setViewportSize({ width: 1280, height: 720 });
-        logger.debug('Viewport set to 1280x720');
-      } catch (viewportError) {
-        logger.warn('Could not set viewport size - Stagehand may have already set it', {
-          error: viewportError instanceof Error ? viewportError.message : String(viewportError),
-        });
-      }
-      
-      // Set default timeout - use try-catch in case method is not available
-      try {
-        if (typeof (this.page as any).setDefaultTimeout === 'function') {
-          (this.page as any).setDefaultTimeout(60000); // 60 seconds for operations
-          logger.debug('Default timeout set to 60000ms');
-        } else {
-          logger.debug('setDefaultTimeout not available on page object');
+      // If page and context provided (legacy Stagehand mode), use them
+      // Otherwise, create new browser with standard Playwright
+      if (page && context) {
+        logger.info('Initializing browser session from provided page and context');
+        this.page = page;
+        this.context = context;
+        
+        if (this.context && typeof this.context.browser === 'function') {
+          this.browser = this.context.browser();
         }
-      } catch (timeoutError) {
-        logger.warn('Could not set default timeout', {
-          error: timeoutError instanceof Error ? timeoutError.message : String(timeoutError),
+        
+        // Set viewport if possible
+        if (this.page && typeof this.page.setViewportSize === 'function') {
+          await this.page.setViewportSize({ width: 1280, height: 720 });
+        }
+        
+        // Set default timeout if possible
+        if (this.page && typeof this.page.setDefaultTimeout === 'function') {
+          this.page.setDefaultTimeout(60000);
+        }
+      } else {
+        logger.info('Initializing new browser session with standard Playwright');
+        
+        // Launch Chromium browser
+        this.browser = await chromium.launch({
+          headless: false, // Show browser for debugging
         });
+        
+        // Create new context
+        this.context = await this.browser.newContext({
+          viewport: { width: 1280, height: 720 },
+          userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        });
+        
+        // Create new page
+        this.page = await this.context.newPage();
+        
+        // Set default timeout
+        this.page.setDefaultTimeout(60000);
       }
       
-      logger.info('Browser session initialized from Stagehand', {
+      logger.info('Browser session initialized', {
         hasPage: !!this.page,
         hasContext: !!this.context,
         hasBrowser: !!this.browser,

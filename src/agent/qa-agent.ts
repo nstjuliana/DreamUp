@@ -227,18 +227,18 @@ export class QAAgent {
     let currentState = state;
 
     try {
-      // Phase 1: Initialize Stagehand (which creates the browser)
+      // Phase 1: Initialize browser (using standard Playwright, not Stagehand)
+      // NOTE: Stagehand v3.0.1 has compatibility issues - disabling for now
       currentState = updatePhase(currentState, 'initializing');
-      currentState = addTimelineEvent(currentState, 'browser_init_start', 'Starting Stagehand and browser initialization');
-      logger.info('Initializing Stagehand client', { testId: currentState.testId });
-      await this.stagehandClient.initialize();
-      currentState = addTimelineEvent(currentState, 'stagehand_init_complete', 'Stagehand client initialized (browser created)');
+      currentState = addTimelineEvent(currentState, 'browser_init_start', 'Starting browser initialization');
+      logger.info('Initializing browser client', { testId: currentState.testId });
+      await this.browserClient.initializeSession();
       
-      // Initialize BrowserClient with the page and context from Stagehand
-      logger.info('Initializing browser client with Stagehand page', { testId: currentState.testId });
-      const page = this.stagehandClient.getPage();
-      const context = this.stagehandClient.getContext();
-      await this.browserClient.initializeSession(page, context);
+      // Stagehand integration disabled due to compatibility issues
+      // await this.stagehandClient.initialize();
+      // const page = this.stagehandClient.getPage();
+      // const context = this.stagehandClient.getContext();
+      // await this.browserClient.initializeSession(page, context);
       
       // Browser session is local (no URL to capture)
       currentState = addTimelineEvent(currentState, 'browser_init_complete', 'Browser session initialized from Stagehand');
@@ -298,9 +298,10 @@ export class QAAgent {
       currentState = updatePhase(currentState, 'interacting');
       currentState = addTimelineEvent(currentState, 'phase_change', 'Entering interaction phase');
       
-      // Find and click start button using Stagehand (optional - some games don't have one)
-      currentState = addTimelineEvent(currentState, 'start_button_search_start', 'Searching for start button using Stagehand');
-      const startButtonLocation = await findStartButton(this.browserClient, this.stagehandClient, currentState.testId);
+      // Find and click start button (optional - some games don't have one)
+      // Stagehand disabled - using standard Playwright click
+      currentState = addTimelineEvent(currentState, 'start_button_search_start', 'Searching for start button');
+      const startButtonLocation = await findStartButton(this.browserClient, null, currentState.testId);
       
       if (!startButtonLocation.success) {
         // Start button not found - log warning but continue (some games don't have start buttons)
@@ -516,7 +517,7 @@ export class QAAgent {
           // Wait before next cycle
           const waitTime = Math.min(aiDecisionInterval, remainingTime);
           if (waitTime > 0) {
-            await page.waitForTimeout(waitTime);
+            await new Promise(resolve => setTimeout(resolve, waitTime));
           }
           continue;
         }
@@ -564,6 +565,7 @@ export class QAAgent {
               });
             }
           } else if (action.action === 'key_press' && action.key) {
+            // Press key on the page (standard Playwright)
             await page.keyboard.press(action.key);
             currentState = addTimelineEvent(currentState, 'gameplay_action', `Key press: ${action.key} - ${action.description}`, {
               action: 'key_press',
@@ -575,7 +577,8 @@ export class QAAgent {
               key: action.key,
             });
           } else if (action.action === 'wait' && action.duration !== undefined) {
-            await page.waitForTimeout(action.duration);
+            // Use setTimeout instead of page.waitForTimeout (deprecated in Playwright)
+            await new Promise(resolve => setTimeout(resolve, action.duration));
             currentState = addTimelineEvent(currentState, 'gameplay_action', `Wait action: ${action.description}`, {
               action: 'wait',
               duration: action.duration,
@@ -636,7 +639,7 @@ export class QAAgent {
         // 5. Wait before next decision
         const waitTime = Math.min(aiDecisionInterval, remainingTime);
         if (waitTime > 0) {
-          await page.waitForTimeout(waitTime);
+          await new Promise(resolve => setTimeout(resolve, waitTime));
         }
 
       } catch (error) {
@@ -648,7 +651,7 @@ export class QAAgent {
         });
         
         // Wait a bit before trying again to avoid rapid error loops
-        await page.waitForTimeout(1000);
+        await new Promise(resolve => setTimeout(resolve, 1000));
       }
     }
 

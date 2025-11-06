@@ -78,56 +78,53 @@ async function captureStartButtonFailure(
  */
 export async function findStartButton(
   client: BrowserClient,
-  stagehandClient: StagehandClient,
+  stagehandClient: StagehandClient | null,
   testId: string
 ): Promise<ElementLocation> {
-  logger.info('Finding start button using Stagehand', { testId });
+  logger.info('Finding start button', { testId });
 
-  // Common variations of start button descriptions
-  const startButtonVariations = [
-    'start button',
-    'play button',
-    'begin button',
-    'start',
-    'play',
-    'begin',
+  // Common button selectors to try with standard Playwright
+  const buttonSelectors = [
+    'button:has-text("Start")',
+    'button:has-text("Play")',
+    'button:has-text("Begin")',
+    '[id*="start"]',
+    '[id*="play"]',
+    '[class*="start"]',
+    '[class*="play"]',
+    'a:has-text("Start")',
+    'a:has-text("Play")',
   ];
 
-  // Try each variation until one succeeds
-  for (const variation of startButtonVariations) {
+  const page = client.getPage();
+  
+  // Try standard Playwright click
+  for (const selector of buttonSelectors) {
     try {
-      logger.debug('Attempting to click start button', { testId, variation });
+      logger.debug('Attempting to click button', { testId, selector });
+      const button = page.locator(selector).first();
+      const count = await button.count();
       
-      const result = await stagehandClient.clickElement(variation);
-      
-      if (result.success) {
-        logger.info('Start button clicked successfully using Stagehand', {
-          testId,
-          variation,
-        });
+      if (count > 0) {
+        await button.click({ timeout: 2000 });
+        logger.info('Start button clicked successfully', { testId, selector });
+        await new Promise(resolve => setTimeout(resolve, 1000)); // Wait for game to start
         return {
           success: true,
           method: 'stagehand-click',
         };
-      } else {
-        logger.debug('Start button click failed, trying next variation', {
-          testId,
-          variation,
-          error: result.error,
-        });
       }
     } catch (error) {
-      logger.debug('Error attempting to click start button', {
+      logger.debug('Button click failed, trying next selector', {
         testId,
-        variation,
+        selector,
         error: error instanceof Error ? error.message : String(error),
       });
-      // Continue to next variation
     }
   }
 
   // All variations failed
-  logger.warn('Start button not found using Stagehand - trying all variations', { testId });
+  logger.warn('Start button not found', { testId });
   const failureScreenshot = await captureStartButtonFailure(client, testId);
   return {
     success: false,
@@ -224,7 +221,7 @@ export async function showClickIndicator(page: Page, x: number, y: number): Prom
   }, overlayHTML);
 
   // Wait briefly for the indicator to be visible
-  await page.waitForTimeout(100);
+  await new Promise(resolve => setTimeout(resolve, 100));
 }
 
 /**

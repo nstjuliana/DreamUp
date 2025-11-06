@@ -48,28 +48,45 @@ export class StagehandClient {
       // Initialize Stagehand - it will create the browser instance
       this.stagehand = new Stagehand({
         env: 'LOCAL', // Use local Playwright, not Browserbase
-        verbose: 0, // Minimal logging
+        verbose: 2, // Increase logging to see what's happening
         domSettleTimeout: 3000, // Wait for DOM to settle (in ms)
-        enableCaching: false, // Disable caching
       });
 
       // Initialize Stagehand (this creates the browser)
-      await this.stagehand.init();
+      const initResult = await this.stagehand.init();
+      logger.debug('Stagehand init() completed', { 
+        result: initResult,
+        hasPageProperty: 'page' in this.stagehand,
+        hasContextProperty: 'context' in this.stagehand,
+      });
       
       // Get the context from Stagehand
-      // Stagehand creates a browser and context internally
+      // Stagehand v3 doesn't expose page directly - we get it from context
       this.context = this.stagehand.context;
       
-      // Get the page from the context
-      if (this.context && this.context.pages && this.context.pages().length > 0) {
-        this.page = this.context.pages()[0];
-      } else {
-        throw new Error('Stagehand did not create a page');
+      if (!this.context) {
+        throw new Error('Stagehand did not create a context');
       }
+      
+      // Get the page from the context (Stagehand v3 doesn't have stagehand.page)
+      const pages = this.context.pages();
+      if (!pages || pages.length === 0) {
+        throw new Error('Stagehand context has no pages');
+      }
+      
+      this.page = pages[0];
+      
+      logger.debug('Checking Stagehand page from context', {
+        pageType: typeof this.page,
+        pageValue: this.page ? 'exists' : 'null/undefined',
+        contextType: typeof this.context,
+        pagesCount: pages.length,
+      });
       
       logger.info('Stagehand client initialized successfully', {
         hasPage: !!this.page,
         hasContext: !!this.context,
+        pageType: typeof this.page,
       });
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);

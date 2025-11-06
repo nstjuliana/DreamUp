@@ -55,7 +55,9 @@ export async function captureScreenshotBuffer(
     let strategySucceeded = false;
     
     // Strategy 1: Try common game container selectors (DOM-based games)
-    if (!strategySucceeded) {
+    // DISABLED: Skipping game container detection per user request - using viewport instead
+    const SKIP_GAME_CONTAINER = true; // Set to false to re-enable
+    if (!strategySucceeded && !SKIP_GAME_CONTAINER) {
       try {
         const gameContainerSelectors = [
           'section.scene', // Game engine scene container (prioritized)
@@ -75,14 +77,42 @@ export async function captureScreenshotBuffer(
         ];
         
         let gameContainer = null;
+        let usedSelector = '';
         for (const selector of gameContainerSelectors) {
           try {
             const count = await page.locator(selector).count();
+            logger.debug('Checking selector for game container', { testId, selector, count });
+            
             if (count > 0) {
-              gameContainer = page.locator(selector).first();
-              const box = await gameContainer.boundingBox();
+              const locator = page.locator(selector).first();
+              
+              // Try to get bounding box - defensive check for Stagehand compatibility
+              let box = null;
+              if (typeof (locator as any).boundingBox === 'function') {
+                box = await (locator as any).boundingBox().catch(() => null);
+              }
+              
+              // Fallback: use evaluate to get bounding box
+              if (!box && typeof (locator as any).evaluate === 'function') {
+                try {
+                  box = await (locator as any).evaluate((el: any) => {
+                    const rect = el.getBoundingClientRect();
+                    return rect.width > 0 && rect.height > 0 ? {
+                      x: rect.x,
+                      y: rect.y,
+                      width: rect.width,
+                      height: rect.height,
+                    } : null;
+                  });
+                } catch {
+                  // Evaluation failed, skip this selector
+                }
+              }
+              
               if (box && box.width > 100 && box.height > 100) {
                 // Only use if it's reasonably sized (not a tiny element)
+                gameContainer = locator;
+                usedSelector = selector;
                 logger.info('Game container found', { 
                   testId, 
                   selector,
@@ -90,32 +120,113 @@ export async function captureScreenshotBuffer(
                   height: box.height,
                 });
                 break;
+              } else if (box) {
+                logger.debug('Game container too small', { testId, selector, width: box.width, height: box.height });
+              } else {
+                logger.debug('Game container has no bounding box', { testId, selector });
               }
-              gameContainer = null;
             }
-          } catch {
+          } catch (error) {
+            logger.debug('Error checking selector', { 
+              testId, 
+              selector, 
+              error: error instanceof Error ? error.message : String(error) 
+            });
             continue;
           }
         }
         
-        if (gameContainer) {
-          await gameContainer.waitFor({ state: 'visible', timeout: 2000 }).catch(() => {
-            logger.debug('Game container visibility timeout, proceeding anyway', { testId });
-          });
+        if (gameContainer && usedSelector) {
+          // Try to wait for visibility if the method exists
+          try {
+            if (typeof (gameContainer as any).waitFor === 'function') {
+              await (gameContainer as any).waitFor({ state: 'visible', timeout: 2000 }).catch(() => {
+                logger.debug('Game container visibility timeout, proceeding anyway', { testId });
+              });
+            }
+          } catch (waitError) {
+            logger.debug('waitFor not available on locator, proceeding anyway', { testId });
+          }
           
-          const screenshotPromise = gameContainer.screenshot({
-            type: 'png',
-            timeout: 5000,
-            animations: 'disabled',
-          });
-          
-          screenshotBuffer = await Promise.race([
-            screenshotPromise,
-            timeoutPromise,
-          ]);
-          
-          logger.info('Screenshot captured from game container', { testId, index });
-          strategySucceeded = true;
+          // Try to capture screenshot - Stagehand locators might not have screenshot method
+          try {
+            // First try: Use locator's screenshot if available
+            if (typeof (gameContainer as any).screenshot === 'function') {
+              const screenshotPromise = (gameContainer as any).screenshot({
+                type: 'png',
+                timeout: 5000,
+                animations: 'disabled',
+              });
+              
+              screenshotBuffer = await Promise.race([
+                screenshotPromise,
+                timeoutPromise,
+              ]);
+              
+              logger.info('Screenshot captured from game container (locator method)', { testId, index });
+              strategySucceeded = true;
+            } else {
+              // Fallback: Get bounding box directly from locator or DOM
+              let box: { x: number; y: number; width: number; height: number } | null = null;
+              
+              // Try boundingBox() method if available
+              if (typeof (gameContainer as any).boundingBox === 'function') {
+                box = await (gameContainer as any).boundingBox().catch(() => null);
+              }
+              
+              // If that didn't work, use evaluate to get bounding box from DOM
+              if (!box && typeof (gameContainer as any).evaluate === 'function') {
+                try {
+                  box = await (gameContainer as any).evaluate((el: any) => {
+                    const rect = el.getBoundingClientRect();
+                    return {
+                      x: rect.x,
+                      y: rect.y,
+                      width: rect.width,
+                      height: rect.height,
+                    };
+                  });
+                } catch (evalError) {
+                  logger.debug('Could not evaluate bounding box from DOM', { testId });
+                }
+              }
+              
+              if (box && box.width > 0 && box.height > 0) {
+                const screenshotPromise = page.screenshot({
+                  type: 'png',
+                  clip: {
+                    x: box.x,
+                    y: box.y,
+                    width: box.width,
+                    height: box.height,
+                  },
+                  timeout: 5000,
+                  animations: 'disabled',
+                });
+                
+                screenshotBuffer = await Promise.race([
+                  screenshotPromise,
+                  timeoutPromise,
+                ]);
+                
+                logger.info('Screenshot captured from game container (bounding box method)', { 
+                  testId, 
+                  index,
+                  selector: usedSelector,
+                  bounds: box,
+                });
+                strategySucceeded = true;
+              } else {
+                logger.warn('Game container found but could not determine bounding box', { testId, selector: usedSelector });
+              }
+            }
+          } catch (screenshotError) {
+            logger.warn('Game container screenshot failed', {
+              testId,
+              selector: usedSelector,
+              error: screenshotError instanceof Error ? screenshotError.message : String(screenshotError),
+            });
+          }
         }
       } catch (containerError) {
         logger.warn('Game container capture failed, trying next strategy', {
@@ -178,12 +289,20 @@ export async function captureScreenshotBuffer(
           }
           
           // Wait for iframe to be attached to the page (reduced timeout)
-          await iframeLocator.waitFor({ state: 'attached', timeout: 2000 }).catch(() => {
-            logger.debug('Iframe attachment timeout, proceeding anyway', { testId });
-          });
+          if (iframeLocator) {
+            try {
+              if (typeof (iframeLocator as any).waitFor === 'function') {
+                await (iframeLocator as any).waitFor({ state: 'attached', timeout: 2000 }).catch(() => {
+                  logger.debug('Iframe attachment timeout, proceeding anyway', { testId });
+                });
+              }
+            } catch (waitError) {
+              logger.debug('waitFor not available on iframe locator, proceeding anyway', { testId });
+            }
+          }
           
           // Get the content frame from the iframe element
-          const iframeElement = await iframeLocator.elementHandle();
+          const iframeElement = iframeLocator ? await iframeLocator.elementHandle() : null;
           const iframeFrame = iframeElement ? await iframeElement.contentFrame() : null;
           
           // Try to capture iframe content frame first (if available)
@@ -367,23 +486,32 @@ export async function captureScreenshotBuffer(
             canvasLocator = page.locator('canvas').first();
           }
           
-          await canvasLocator.waitFor({ state: 'visible', timeout: 2000 }).catch(() => {
-            logger.debug('Canvas visibility timeout, proceeding anyway', { testId });
-          });
-          
-          const screenshotPromise = canvasLocator.screenshot({
-            type: 'png',
-            timeout: 5000,
-            animations: 'disabled',
-          });
-          
-          screenshotBuffer = await Promise.race([
-            screenshotPromise,
-            timeoutPromise,
-          ]);
-          
-          logger.info('Screenshot captured from canvas', { testId, index });
-          strategySucceeded = true;
+          // Try to wait for visibility if the method exists
+          if (canvasLocator) {
+            try {
+              if (typeof (canvasLocator as any).waitFor === 'function') {
+                await (canvasLocator as any).waitFor({ state: 'visible', timeout: 2000 }).catch(() => {
+                  logger.debug('Canvas visibility timeout, proceeding anyway', { testId });
+                });
+              }
+            } catch (waitError) {
+              logger.debug('waitFor not available on canvas locator, proceeding anyway', { testId });
+            }
+            
+            const screenshotPromise = canvasLocator.screenshot({
+              type: 'png',
+              timeout: 5000,
+              animations: 'disabled',
+            });
+            
+            screenshotBuffer = await Promise.race([
+              screenshotPromise,
+              timeoutPromise,
+            ]);
+            
+            logger.info('Screenshot captured from canvas', { testId, index });
+            strategySucceeded = true;
+          }
         }
       } catch (canvasError) {
         logger.warn('Canvas capture failed, trying next strategy', {
