@@ -6,6 +6,9 @@ import { EmptyState } from '@/components/ui/empty-state'
 import { supabase } from '@/lib/supabase'
 import type { GameWithManifest } from '@/lib/types'
 
+// Disable caching for this page in development
+export const dynamic = 'force-dynamic'
+
 async function getGames() {
   try {
     // Fetch games with their last test run
