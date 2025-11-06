@@ -172,7 +172,6 @@ export interface ManifestData {
   };
   gameStates?: GameState[];
   loadingDuration?: number;
-  screenshotIntervals?: number[]; // Time-based screenshot intervals (ms)
   gameplayDuration?: number; // Gameplay simulation duration (ms, default 30-60s)
   gameplayGoal?: string; // Custom goal for AI gameplay (e.g., "Collect as many coins as possible")
   aiDecisionInterval?: number; // Milliseconds between AI decisions during gameplay (default 2000ms)

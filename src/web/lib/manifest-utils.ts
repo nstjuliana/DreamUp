@@ -7,7 +7,6 @@ export {
   parseManifest,
   validateManifest,
   getGameplayDuration,
-  getScreenshotIntervals,
   getGameplayGoal,
   getAiDecisionInterval,
 } from '@shared/utils/manifest-parser'

@@ -19,7 +19,7 @@ import type { ConsoleLogEntry } from '../browser/console-logger.js';
 import type { TestResult } from '../cli/output-formatter.js';
 import { createSuccessResult, createErrorResult, createTimeoutResult, outputTimeline } from '../cli/output-formatter.js';
 import { LLMEvaluator } from '../evaluation/llm-evaluator.js';
-import { parseManifest, getGameplayDuration, getScreenshotIntervals, getGameplayGoal, getAiDecisionInterval } from '../utils/manifest-parser.js';
+import { parseManifest, getGameplayDuration, getGameplayGoal, getAiDecisionInterval } from '../utils/manifest-parser.js';
 import { createAgentState, updatePhase, addScreenshot, setConsoleLogsUrl, setError, finalizeState, addTimelineEvent } from './agent-state.js';
 import type { AgentState } from './agent-state.js';
 import type { ManifestData, GameUpdate } from '../storage/types.js';
@@ -347,23 +347,15 @@ export class QAAgent {
       const gameplayDuration = getGameplayDuration(currentState.manifest || null, 45000); // Default 45s
       currentState = await this.simulateGameplay(currentState, gameplayDuration);
 
-      // Phase 5: Monitoring - capture remaining screenshots
+      // Phase 5: Monitoring - capture final screenshot
       currentState = updatePhase(currentState, 'monitoring');
-      const screenshotIntervals = getScreenshotIntervals(currentState.manifest || null);
-      
-      if (screenshotIntervals) {
-        // Time-based screenshot capture (null check above ensures non-null)
-        currentState = await this.captureScreenshotsTimeBased(currentState, screenshotIntervals as number[]);
-      } else {
-        // Event-based: capture final screenshot
-        const finalScreenshot = await captureScreenshot(this.browserClient, currentState.testId, currentState.screenshots.length);
-        if (finalScreenshot) {
-          currentState = addScreenshot(currentState, finalScreenshot as string);
-          currentState = addTimelineEvent(currentState, 'screenshot_captured', 'Final screenshot captured', {
-            index: currentState.screenshots.length - 1,
-            url: finalScreenshot,
-          });
-        }
+      const finalScreenshot = await captureScreenshot(this.browserClient, currentState.testId, currentState.screenshots.length);
+      if (finalScreenshot) {
+        currentState = addScreenshot(currentState, finalScreenshot as string);
+        currentState = addTimelineEvent(currentState, 'screenshot_captured', 'Final screenshot captured', {
+          index: currentState.screenshots.length - 1,
+          url: finalScreenshot,
+        });
       }
 
       // Finalize console logs
@@ -671,52 +663,6 @@ export class QAAgent {
       screenshotsCaptured,
     });
 
-    return currentState;
-  }
-
-  /**
-   * Capture screenshots at time-based intervals.
-   * 
-   * @param {AgentState} state - Agent state
-   * @param {number[]} intervals - Screenshot intervals in milliseconds
-   * @returns {Promise<AgentState>} Updated agent state
-   * @private
-   */
-  private async captureScreenshotsTimeBased(state: AgentState, intervals: number[]): Promise<AgentState> {
-    logger.info('Capturing time-based screenshots', {
-      testId: state.testId,
-      intervals,
-    });
-
-    let currentState = state;
-    const startTime = Date.now();
-    
-    for (let i = 0; i < intervals.length; i++) {
-      const interval = intervals[i];
-      if (interval === undefined) continue;
-      
-      const elapsed = Date.now() - startTime;
-      const waitTime = Math.max(0, interval - elapsed);
-      
-      if (waitTime > 0) {
-        await new Promise(resolve => setTimeout(resolve, waitTime));
-      }
-      
-      const screenshot = await captureScreenshot(
-        this.browserClient,
-        currentState.testId,
-        currentState.screenshots.length
-      );
-      if (screenshot) {
-        currentState = addScreenshot(currentState, screenshot);
-        currentState = addTimelineEvent(currentState, 'screenshot_captured', `Time-based screenshot captured at ${interval}ms`, {
-          index: currentState.screenshots.length - 1,
-          url: screenshot,
-          interval,
-        });
-      }
-    }
-    
     return currentState;
   }
 

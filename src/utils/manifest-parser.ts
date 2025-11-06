@@ -239,9 +239,6 @@ export function parseManifest(manifestData: Json): ManifestData {
     },
     gameStates,
     loadingDuration: typeof manifest.loadingDuration === 'number' ? manifest.loadingDuration : undefined,
-    screenshotIntervals: Array.isArray(manifest.screenshotIntervals)
-      ? (manifest.screenshotIntervals as number[]).filter((i: unknown) => typeof i === 'number')
-      : undefined,
     gameplayDuration: typeof manifest.gameplayDuration === 'number' ? manifest.gameplayDuration : undefined,
     gameplayGoal: typeof manifest.gameplayGoal === 'string' ? manifest.gameplayGoal : undefined,
     aiDecisionInterval: typeof manifest.aiDecisionInterval === 'number' ? manifest.aiDecisionInterval : undefined,
@@ -314,22 +311,6 @@ export function getGameplayDuration(manifest: ManifestData | null, defaultDurati
     return manifest.gameplayDuration;
   }
   return defaultDurationMs;
-}
-
-/**
- * Get screenshot intervals from manifest or return null for event-based.
- * 
- * Returns the screenshot intervals array if specified in manifest for
- * time-based capture, or null to use event-based capture.
- * 
- * @param {ManifestData | null} manifest - Parsed manifest data or null
- * @returns {number[] | null} Screenshot intervals in milliseconds, or null for event-based
- */
-export function getScreenshotIntervals(manifest: ManifestData | null): number[] | null {
-  if (manifest?.screenshotIntervals && manifest.screenshotIntervals.length > 0) {
-    return manifest.screenshotIntervals;
-  }
-  return null;
 }
 
 /**
