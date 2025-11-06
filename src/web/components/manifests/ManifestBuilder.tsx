@@ -52,7 +52,7 @@ export function ManifestBuilder({ initialData, onSave, isSubmitting }: ManifestB
     initialData?.gameplayGoal || 'Play the game as effectively as possible'
   )
   const [aiDecisionInterval, setAiDecisionInterval] = useState<number>(
-    initialData?.aiDecisionInterval || 2000
+    initialData?.aiDecisionInterval !== undefined ? initialData.aiDecisionInterval : 2000
   )
 
   const [notes, setNotes] = useState<string>(initialData?.notes || '')
@@ -97,9 +97,13 @@ export function ManifestBuilder({ initialData, onSave, isSubmitting }: ManifestB
       loadingDuration,
       gameplayDuration,
       gameplayGoal,
-      aiDecisionInterval,
+      // Explicitly include aiDecisionInterval even if 0 (0 is a valid value to disable delays)
+      aiDecisionInterval: aiDecisionInterval,
       notes: notes || undefined,
     }
+
+    // Debug: log the value being sent
+    console.log('Submitting manifest with aiDecisionInterval:', manifestData.aiDecisionInterval)
 
     onSave(manifestData)
   }
@@ -117,7 +121,8 @@ export function ManifestBuilder({ initialData, onSave, isSubmitting }: ManifestB
       loadingDuration,
       gameplayDuration,
       gameplayGoal,
-      aiDecisionInterval,
+      // Explicitly include aiDecisionInterval even if 0 (0 is a valid value)
+      aiDecisionInterval: typeof aiDecisionInterval === 'number' ? aiDecisionInterval : undefined,
       notes: notes || undefined,
     },
     null,
@@ -314,11 +319,15 @@ export function ManifestBuilder({ initialData, onSave, isSubmitting }: ManifestB
                 id="ai-interval"
                 type="number"
                 value={aiDecisionInterval}
-                onChange={(e) => setAiDecisionInterval(parseInt(e.target.value) || 0)}
+                onChange={(e) => {
+                  const value = e.target.value === '' ? 0 : parseInt(e.target.value, 10)
+                  setAiDecisionInterval(isNaN(value) ? 0 : value)
+                }}
+                min={0}
                 step={500}
               />
               <p className="text-xs text-muted-foreground">
-                Time between AI decisions during gameplay (default: 2000ms)
+                Time between AI decisions during gameplay (default: 2000ms). Set to 0 to disable delays.
               </p>
             </div>
           </CardContent>
