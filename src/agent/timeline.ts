@@ -29,6 +29,7 @@ export type TimelineEventType =
   | 'start_button_clicked'
   | 'console_logs_collected'
   | 'gameplay_start'
+  | 'gameplay_action'
   | 'gameplay_complete'
   | 'evaluation_start'
   | 'evaluation_complete'

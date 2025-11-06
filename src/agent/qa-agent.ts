@@ -250,7 +250,6 @@ export class QAAgent {
 
       // Capture baseline screenshot
       logger.info('Capturing baseline screenshot', { testId: currentState.testId });
-      currentState = addTimelineEvent(currentState, 'screenshot_captured', 'Starting baseline screenshot capture');
       const screenshotStartTime = Date.now();
       
       // Capture screenshot buffer first
@@ -259,12 +258,6 @@ export class QAAgent {
       const captureDuration = Date.now() - screenshotStartTime;
       
       if (buffer) {
-        currentState = addTimelineEvent(currentState, 'screenshot_captured', 'Screenshot buffer captured', { 
-          index: 0,
-          captureDurationMs: captureDuration,
-          bufferSize: buffer.length
-        });
-        
         // Upload screenshot
         const uploadStartTime = Date.now();
         const { uploadScreenshot } = await import('../storage/file-storage.js');
@@ -273,7 +266,7 @@ export class QAAgent {
         
         if (baselineScreenshot) {
           currentState = addScreenshot(currentState, baselineScreenshot);
-          currentState = addTimelineEvent(currentState, 'screenshot_captured', 'Baseline screenshot uploaded', { 
+          currentState = addTimelineEvent(currentState, 'screenshot_captured', 'Baseline screenshot captured and uploaded', { 
             index: 0, 
             url: baselineScreenshot,
             captureDurationMs: captureDuration,
@@ -329,7 +322,10 @@ export class QAAgent {
         const afterStartScreenshot = await captureScreenshot(this.browserClient, currentState.testId, 1);
         if (afterStartScreenshot) {
           currentState = addScreenshot(currentState, afterStartScreenshot);
-          currentState = addTimelineEvent(currentState, 'screenshot_captured', 'Post-click screenshot captured', { index: 1 });
+          currentState = addTimelineEvent(currentState, 'screenshot_captured', 'Post-click screenshot captured', {
+            index: 1,
+            url: afterStartScreenshot,
+          });
         }
       }
 
@@ -349,6 +345,10 @@ export class QAAgent {
         const finalScreenshot = await captureScreenshot(this.browserClient, currentState.testId, currentState.screenshots.length);
         if (finalScreenshot) {
           currentState = addScreenshot(currentState, finalScreenshot as string);
+          currentState = addTimelineEvent(currentState, 'screenshot_captured', 'Final screenshot captured', {
+            index: currentState.screenshots.length - 1,
+            url: finalScreenshot,
+          });
         }
       }
 
@@ -469,6 +469,13 @@ export class QAAgent {
     });
 
     let currentState = state;
+    currentState = addTimelineEvent(currentState, 'gameplay_start', 'Starting vision-based gameplay simulation', {
+      duration: durationMs,
+      gameType,
+      controls: controls.primary,
+      goal: gameplayGoal,
+    });
+    
     const startTime = Date.now();
     let decisionCount = 0;
     let screenshotIndex = currentState.screenshots.length;
@@ -517,6 +524,12 @@ export class QAAgent {
         try {
           if (action.action === 'click' && action.x !== undefined && action.y !== undefined) {
             await page.mouse.click(action.x, action.y);
+            currentState = addTimelineEvent(currentState, 'gameplay_action', `Click action: ${action.description}`, {
+              action: 'click',
+              x: action.x,
+              y: action.y,
+              decisionCycle: decisionCount,
+            });
             logger.info('Click action executed', {
               testId: currentState.testId,
               x: action.x,
@@ -524,12 +537,22 @@ export class QAAgent {
             });
           } else if (action.action === 'key_press' && action.key) {
             await page.keyboard.press(action.key);
+            currentState = addTimelineEvent(currentState, 'gameplay_action', `Key press: ${action.key} - ${action.description}`, {
+              action: 'key_press',
+              key: action.key,
+              decisionCycle: decisionCount,
+            });
             logger.info('Key press action executed', {
               testId: currentState.testId,
               key: action.key,
             });
           } else if (action.action === 'wait' && action.duration !== undefined) {
             await page.waitForTimeout(action.duration);
+            currentState = addTimelineEvent(currentState, 'gameplay_action', `Wait action: ${action.description}`, {
+              action: 'wait',
+              duration: action.duration,
+              decisionCycle: decisionCount,
+            });
             logger.info('Wait action executed', {
               testId: currentState.testId,
               duration: action.duration,
@@ -537,6 +560,10 @@ export class QAAgent {
           } else if (action.action === 'scroll') {
             // Scroll down by default
             await page.mouse.wheel(0, 300);
+            currentState = addTimelineEvent(currentState, 'gameplay_action', `Scroll action: ${action.description}`, {
+              action: 'scroll',
+              decisionCycle: decisionCount,
+            });
             logger.info('Scroll action executed', {
               testId: currentState.testId,
             });
@@ -547,6 +574,11 @@ export class QAAgent {
             action: action.action,
             error: actionError instanceof Error ? actionError.message : String(actionError),
           });
+          currentState = addTimelineEvent(currentState, 'error', `Action execution failed: ${action.action}`, {
+            action: action.action,
+            error: actionError instanceof Error ? actionError.message : String(actionError),
+            decisionCycle: decisionCount,
+          });
         }
 
         // 4. Store screenshot in state for evaluation
@@ -554,6 +586,11 @@ export class QAAgent {
           const screenshotUrl = await uploadScreenshot(screenshotBuffer, currentState.testId, screenshotIndex);
           if (screenshotUrl) {
             currentState = addScreenshot(currentState, screenshotUrl);
+            currentState = addTimelineEvent(currentState, 'screenshot_captured', `Screenshot captured during gameplay (cycle ${decisionCount})`, {
+              index: screenshotIndex,
+              url: screenshotUrl,
+              decisionCycle: decisionCount,
+            });
             screenshotIndex++;
             logger.debug('Screenshot stored in state', {
               testId: currentState.testId,
@@ -587,11 +624,20 @@ export class QAAgent {
       }
     }
 
+    const totalDuration = Date.now() - startTime;
+    const screenshotsCaptured = currentState.screenshots.length - state.screenshots.length;
+    
     logger.info('Vision-based gameplay simulation completed', {
       testId: currentState.testId,
       totalDecisions: decisionCount,
-      totalDuration: Date.now() - startTime,
-      screenshotsCaptured: currentState.screenshots.length - state.screenshots.length,
+      totalDuration,
+      screenshotsCaptured,
+    });
+
+    currentState = addTimelineEvent(currentState, 'gameplay_complete', 'Vision-based gameplay simulation completed', {
+      totalDecisions: decisionCount,
+      totalDurationMs: totalDuration,
+      screenshotsCaptured,
     });
 
     return currentState;
@@ -632,6 +678,11 @@ export class QAAgent {
       );
       if (screenshot) {
         currentState = addScreenshot(currentState, screenshot);
+        currentState = addTimelineEvent(currentState, 'screenshot_captured', `Time-based screenshot captured at ${interval}ms`, {
+          index: currentState.screenshots.length - 1,
+          url: screenshot,
+          interval,
+        });
       }
     }
     
