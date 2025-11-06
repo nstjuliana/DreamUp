@@ -46,25 +46,29 @@ export interface GameContext {
 }
 
 /**
- * Decide next action based on screenshot.
+ * Decide next action based on screenshot(s).
  * 
  * Analyzes the current game state using GPT-4o-mini vision and returns
  * a structured action decision. The viewport is fixed at 1280x720 for
  * consistent coordinate mapping.
  * 
- * @param {string} screenshotBase64 - Base64-encoded PNG screenshot
+ * When a previous screenshot is provided, the model can detect changes
+ * and make more informed decisions based on game state transitions.
+ * 
+ * @param {string} screenshotBase64 - Base64-encoded PNG screenshot (current state)
  * @param {GameContext} gameContext - Game context (type, controls, goal)
  * @param {OpenAI} openaiClient - OpenAI client instance
+ * @param {string} [previousScreenshotBase64] - Optional previous screenshot for change detection
  * @returns {Promise<GameAction>} Next action to execute
  * @throws {Error} If action decision fails
  * 
  * @example
  * ```typescript
- * const action = await decideNextAction(screenshot, {
+ * const action = await decideNextAction(currentScreenshot, {
  *   gameType: 'platformer',
  *   controls: ['ArrowUp', 'Space'],
  *   goal: 'Navigate through levels'
- * }, openaiClient);
+ * }, openaiClient, previousScreenshot);
  * 
  * if (action.action === 'click') {
  *   await stagehandClient.clickElement(action.target!);
@@ -74,28 +78,44 @@ export interface GameContext {
 export async function decideNextAction(
   screenshotBase64: string,
   gameContext: GameContext,
-  openaiClient: OpenAI
+  openaiClient: OpenAI,
+  previousScreenshotBase64?: string
 ): Promise<GameAction> {
   try {
+    const hasPreviousScreenshot = !!previousScreenshotBase64;
+    
     logger.debug('Deciding next action using GPT-4o-mini vision', {
       gameType: gameContext.gameType,
       controls: gameContext.controls,
+      hasPreviousScreenshot,
     });
-
-    const systemPrompt = `You are playing a browser game. Based on the screenshot, decide the next action to take.
+    
+    const systemPrompt = `You are playing a browser game. Based on the screenshot${hasPreviousScreenshot ? 's (previous and current)' : ''}, decide the next action to take.
 
 Game Context:
 - Game Type: ${gameContext.gameType}
 - Available Controls: ${gameContext.controls.join(', ')}
 - Goal: ${gameContext.goal}
 
+${hasPreviousScreenshot ? `IMPORTANT: You will receive TWO images:
+1. Previous screenshot (from the last decision cycle)
+2. Current screenshot (current game state)
+
+Compare these images to understand:
+- What changed since the last action
+- Whether the game state has progressed or stalled
+- If the previous action had the intended effect
+- Whether the game is waiting for input or animating
+
+Use this temporal context to make better decisions.` : ''}
+
 Rules:
-1. Analyze the current game state from the screenshot
+1. ${hasPreviousScreenshot ? 'Compare the previous and current screenshots to understand what changed. ' : ''}Analyze the current game state from the screenshot${hasPreviousScreenshot ? 's' : ''}
 2. Decide the best action: click, key_press, wait, or scroll
 3. For clicks: provide a natural language description of what to click (e.g., "Start button", "enemy character", "menu item", "power-up")
 4. For key_press: use one of the available controls (${gameContext.controls.join(', ')})
-5. For wait: specify duration in milliseconds (max 2000ms)
-6. Always provide a clear description explaining your decision
+5. For wait: specify duration in milliseconds (max 2000ms) - use this if the game is animating or if no immediate action is needed
+6. Always provide a clear description explaining your decision${hasPreviousScreenshot ? ', including what changed from the previous state' : ''}
 
 Return your response as a JSON object with this exact structure:
 {
@@ -103,10 +123,38 @@ Return your response as a JSON object with this exact structure:
   "target": string (required for click - natural language description of what to click),
   "key": string (required for key_press, e.g., "ArrowUp", "Space"),
   "duration": number (required for wait, in milliseconds),
-  "description": string (required, explain your decision)
+  "description": string (required, explain your decision${hasPreviousScreenshot ? ' and what changed from previous state' : ''})
 }`;
 
-    const userPrompt = `What action should I take next? Analyze the screenshot and return a JSON object with the action decision.`;
+    const userPrompt = hasPreviousScreenshot
+      ? `Compare the previous screenshot (first image) with the current screenshot (second image). What action should I take next? Analyze what changed and return a JSON object with the action decision.`
+      : `What action should I take next? Analyze the screenshot and return a JSON object with the action decision.`;
+
+    // Build message content array with images
+    const messageContent: Array<{ type: 'text' | 'image_url'; text?: string; image_url?: { url: string } }> = [
+      {
+        type: 'text',
+        text: userPrompt,
+      },
+    ];
+
+    // Add previous screenshot first if available
+    if (previousScreenshotBase64) {
+      messageContent.push({
+        type: 'image_url',
+        image_url: {
+          url: `data:image/png;base64,${previousScreenshotBase64}`,
+        },
+      });
+    }
+
+    // Add current screenshot
+    messageContent.push({
+      type: 'image_url',
+      image_url: {
+        url: `data:image/png;base64,${screenshotBase64}`,
+      },
+    });
 
     const response = await openaiClient.chat.completions.create({
       model: 'gpt-4o-mini',
@@ -117,18 +165,7 @@ Return your response as a JSON object with this exact structure:
         },
         {
           role: 'user',
-          content: [
-            {
-              type: 'text',
-              text: userPrompt,
-            },
-            {
-              type: 'image_url',
-              image_url: {
-                url: `data:image/png;base64,${screenshotBase64}`,
-              },
-            },
-          ],
+          content: messageContent as any, // OpenAI SDK types are complex, but this works
         },
       ],
       temperature: 0.7,

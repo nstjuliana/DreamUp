@@ -12,7 +12,7 @@
 import { Command } from 'commander';
 import { logger } from '../utils/logger.js';
 import { ValidationError } from '../utils/errors.js';
-import { findGameByUrl, getManifestsForGame, getManifestByVersion, createGame, createManifest } from '../storage/database.js';
+import { findGameByUrl, getManifestsForGame, getManifestByVersion, getActiveManifest, createGame, createManifest } from '../storage/database.js';
 import { QAAgent } from '../agent/qa-agent.js';
 import { outputResult, createErrorResult } from './output-formatter.js';
 import { validateUrl } from '../utils/validation.js';
@@ -324,110 +324,73 @@ async function executeTestCommand(gameUrlArg: string, options: CommandOptions): 
         }
       }
     } else {
-      // Step 2: Check if manifests exist in DB
-      const allManifests = await getManifestsForGame(game.id);
+      // Step 2: No manifest provided - try to retrieve latest from Supabase
+      logger.info('No manifest provided, attempting to retrieve from Supabase', {
+        gameId: game.id,
+      });
       
-      if (allManifests.length === 0) {
-        // Step 3: No manifests found - error out
-        const errorResult = createErrorResult(
-          'No manifest found for this game. A manifest is required to run tests. Please create a manifest via Web UI or use --manifest flag if one exists.',
-          { game_url: validatedUrl, game_id: game.id }
-        );
-        outputResult(errorResult);
-        process.exit(1);
-      } else if (allManifests.length === 1) {
-        // Single manifest - use it automatically
+      // First, try to get active manifest
+      let selectedManifest = await getActiveManifest(game.id);
+      
+      if (!selectedManifest) {
+        // No active manifest - get all manifests and use the latest (first one, ordered by created_at desc)
+        const allManifests = await getManifestsForGame(game.id);
+        
+        if (allManifests.length === 0) {
+          // No manifests found - inform user and exit
+          logger.error('No manifest found for this game', {
+            gameId: game.id,
+            gameUrl: validatedUrl,
+          });
+          const errorResult = createErrorResult(
+            'No manifest found for this game. A manifest is required to run tests. Please create a manifest via Web UI or use --manifest flag to specify a manifest file or version.',
+            { game_url: validatedUrl, game_id: game.id }
+          );
+          outputResult(errorResult);
+          process.exit(1);
+        }
+        
+        // Use the latest manifest (first in list, ordered by created_at desc)
         selectedManifest = allManifests[0];
-        manifestId = selectedManifest.id;
-        logger.info('Single manifest found, using automatically', {
+        logger.info('Using latest manifest (no active manifest found)', {
+          manifestId: selectedManifest.id,
+          version: selectedManifest.version_name,
+          totalManifests: allManifests.length,
+        });
+      } else {
+        logger.info('Using active manifest', {
           manifestId: selectedManifest.id,
           version: selectedManifest.version_name,
         });
-        
-        try {
-          parsedManifest = parseManifest(selectedManifest.manifest_data);
-          logger.info('Manifest parsed successfully', {
-            manifestId: selectedManifest.id,
-            version: selectedManifest.version_name,
-            gameType: parsedManifest.gameType,
-          });
-        } catch (parseError) {
-          const message = parseError instanceof Error ? parseError.message : String(parseError);
-          logger.error('Failed to parse manifest', {
-            manifestId: selectedManifest.id,
-            error: message,
-          });
-          const errorResult = createErrorResult(
-            `Failed to parse manifest: ${message}`,
-            { game_url: validatedUrl, manifest_version: selectedManifest.version_name }
-          );
-          outputResult(errorResult);
-          process.exit(1);
-        }
-      } else {
-        // Multiple manifests - prompt user to select
-        logger.info('Multiple manifests found, prompting user to select', {
-          gameId: game.id,
-          count: allManifests.length,
+      }
+      
+      manifestId = selectedManifest.id;
+      
+      try {
+        parsedManifest = parseManifest(selectedManifest.manifest_data);
+        logger.info('Manifest parsed successfully', {
+          manifestId: selectedManifest.id,
+          version: selectedManifest.version_name,
+          gameType: parsedManifest.gameType,
         });
-
-        // Find active manifest index for default
-        const activeIndex = allManifests.findIndex(m => m.is_active);
-        const defaultIndex = activeIndex >= 0 ? activeIndex : 0;
-
-        // Build options list
-        const manifestOptions = allManifests.map((manifest) => ({
-          label: `${manifest.version_name}${manifest.is_active ? ' (active)' : ''}${manifest.notes ? ` - ${manifest.notes}` : ''}`,
-          value: manifest,
-        }));
-
-        try {
-          const selectedIndex = await promptSelect(
-            'Select manifest version to use:',
-            manifestOptions,
-            defaultIndex
-          );
-
-          selectedManifest = allManifests[selectedIndex];
-          manifestId = selectedManifest.id;
-          
-          logger.info('User selected manifest', {
-            manifestId: selectedManifest.id,
-            version: selectedManifest.version_name,
-          });
-
-          try {
-            parsedManifest = parseManifest(selectedManifest.manifest_data);
-            logger.info('Manifest parsed successfully', {
-              manifestId: selectedManifest.id,
-              version: selectedManifest.version_name,
-              gameType: parsedManifest.gameType,
-            });
-          } catch (parseError) {
-            const message = parseError instanceof Error ? parseError.message : String(parseError);
-            logger.error('Failed to parse manifest', {
-              manifestId: selectedManifest.id,
-              error: message,
-            });
-            const errorResult = createErrorResult(
-              `Failed to parse selected manifest: ${message}`,
-              { game_url: validatedUrl, manifest_version: selectedManifest.version_name }
-            );
-            outputResult(errorResult);
-            process.exit(1);
+      } catch (parseError) {
+        const message = parseError instanceof Error ? parseError.message : String(parseError);
+        logger.error('Failed to parse manifest', {
+          manifestId: selectedManifest.id,
+          version: selectedManifest.version_name,
+          error: message,
+        });
+        const errorResult = createErrorResult(
+          `Failed to parse manifest "${selectedManifest.version_name}" (ID: ${selectedManifest.id}): ${message}. Please fix the manifest via Web UI or use --manifest flag to specify a different manifest.`,
+          { 
+            game_url: validatedUrl, 
+            manifest_id: selectedManifest.id,
+            manifest_version: selectedManifest.version_name,
+            error: message
           }
-        } catch (promptError) {
-          const message = promptError instanceof Error ? promptError.message : String(promptError);
-          logger.error('Failed to prompt for manifest selection', {
-            error: message,
-          });
-          const errorResult = createErrorResult(
-            `Failed to select manifest: ${message}`,
-            { game_url: validatedUrl }
-          );
-          outputResult(errorResult);
-          process.exit(1);
-        }
+        );
+        outputResult(errorResult);
+        process.exit(1);
       }
     }
     

@@ -485,6 +485,7 @@ export class QAAgent {
     const startTime = Date.now();
     let decisionCount = 0;
     let screenshotIndex = currentState.screenshots.length;
+    let previousScreenshotBase64: string | undefined = undefined;
 
     // AI decision loop - runs until duration expires
     while (Date.now() - startTime < durationMs) {
@@ -497,6 +498,7 @@ export class QAAgent {
           testId: currentState.testId,
           elapsedMs: elapsedTime,
           remainingMs: remainingTime,
+          hasPreviousScreenshot: !!previousScreenshotBase64,
         });
 
         // 1. Capture screenshot
@@ -517,8 +519,11 @@ export class QAAgent {
         // Convert to base64 for vision API
         const screenshotBase64 = screenshotBuffer.toString('base64');
 
-        // 2. Decide action using vision
-        const action = await decideNextAction(screenshotBase64, gameContext, openaiClient);
+        // 2. Decide action using vision (with previous screenshot for change detection)
+        const action = await decideNextAction(screenshotBase64, gameContext, openaiClient, previousScreenshotBase64);
+        
+        // Store current screenshot as previous for next iteration
+        previousScreenshotBase64 = screenshotBase64;
 
         logger.debug('Action decision made', {
           testId: currentState.testId,
