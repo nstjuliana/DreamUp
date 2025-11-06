@@ -11,6 +11,7 @@
  */
 
 import { BrowserClient } from '../browser/browser-client.js';
+import { StagehandClient } from '../browser/stagehand-client.js';
 import { captureScreenshot, captureMultipleScreenshots, captureScreenshotBuffer } from '../browser/screenshot-capture.js';
 import { collectConsoleLogs, finalizeConsoleLogs } from '../browser/console-logger.js';
 import { findStartButton, clickElement } from '../browser/ui-pattern-detector.js';
@@ -61,11 +62,13 @@ export interface QAAgentRunParams {
  */
 export class QAAgent {
   private browserClient: BrowserClient;
+  private stagehandClient: StagehandClient;
   private consoleLogEntries: ConsoleLogEntry[] = [];
   private llmEvaluator: LLMEvaluator;
   
   constructor() {
     this.browserClient = new BrowserClient();
+    this.stagehandClient = new StagehandClient();
     this.llmEvaluator = new LLMEvaluator();
   }
 
@@ -194,6 +197,14 @@ export class QAAgent {
         duration_ms,
       };
     } finally {
+      // Always cleanup resources
+      try {
+        await this.stagehandClient.cleanup();
+      } catch (cleanupError) {
+        logger.warn('Error during Stagehand cleanup', {
+          error: cleanupError instanceof Error ? cleanupError.message : String(cleanupError),
+        });
+      }
       // Always close browser session
       await this.browserClient.closeSession();
     }
@@ -216,14 +227,21 @@ export class QAAgent {
     let currentState = state;
 
     try {
-      // Phase 1: Initialize browser session
+      // Phase 1: Initialize Stagehand (which creates the browser)
       currentState = updatePhase(currentState, 'initializing');
-      currentState = addTimelineEvent(currentState, 'browser_init_start', 'Starting browser session initialization');
-      logger.info('Initializing browser session', { testId: currentState.testId });
-      await this.browserClient.initializeSession();
+      currentState = addTimelineEvent(currentState, 'browser_init_start', 'Starting Stagehand and browser initialization');
+      logger.info('Initializing Stagehand client', { testId: currentState.testId });
+      await this.stagehandClient.initialize();
+      currentState = addTimelineEvent(currentState, 'stagehand_init_complete', 'Stagehand client initialized (browser created)');
+      
+      // Initialize BrowserClient with the page and context from Stagehand
+      logger.info('Initializing browser client with Stagehand page', { testId: currentState.testId });
+      const page = this.stagehandClient.getPage();
+      const context = this.stagehandClient.getContext();
+      await this.browserClient.initializeSession(page, context);
       
       // Browser session is local (no URL to capture)
-      currentState = addTimelineEvent(currentState, 'browser_init_complete', 'Browser session initialized');
+      currentState = addTimelineEvent(currentState, 'browser_init_complete', 'Browser session initialized from Stagehand');
 
       // Phase 2: Set up console log collection
       logger.info('Setting up console log collection', { testId: currentState.testId });
@@ -280,11 +298,11 @@ export class QAAgent {
       currentState = updatePhase(currentState, 'interacting');
       currentState = addTimelineEvent(currentState, 'phase_change', 'Entering interaction phase');
       
-      // Find and click start button using GPT-4o-mini vision (optional - some games don't have one)
-      currentState = addTimelineEvent(currentState, 'start_button_search_start', 'Searching for start button using GPT-4o-mini vision');
-      const startButtonLocation = await findStartButton(this.browserClient);
+      // Find and click start button using Stagehand (optional - some games don't have one)
+      currentState = addTimelineEvent(currentState, 'start_button_search_start', 'Searching for start button using Stagehand');
+      const startButtonLocation = await findStartButton(this.browserClient, this.stagehandClient, currentState.testId);
       
-      if (!startButtonLocation.coordinates) {
+      if (!startButtonLocation.success) {
         // Start button not found - log warning but continue (some games don't have start buttons)
         logger.warn('Start button not found - continuing without clicking start button', {
           testId: currentState.testId,
@@ -299,20 +317,15 @@ export class QAAgent {
 
         currentState = addTimelineEvent(currentState, 'start_button_not_found', 'No start button found - game may start automatically');
       } else {
-        // Button found - click it
-        logger.info('Start button found using GPT-4o-mini vision, clicking', {
+        // Button found and clicked successfully
+        logger.info('Start button clicked successfully using Stagehand', {
           testId: currentState.testId,
           method: startButtonLocation.method,
-          x: startButtonLocation.coordinates.x,
-          y: startButtonLocation.coordinates.y,
         });
-        currentState = addTimelineEvent(currentState, 'start_button_found', 'Start button detected', {
+        currentState = addTimelineEvent(currentState, 'start_button_found', 'Start button detected and clicked', {
           method: startButtonLocation.method,
-          x: startButtonLocation.coordinates.x,
-          y: startButtonLocation.coordinates.y,
         });
         
-        await clickElement(this.browserClient, startButtonLocation);
         currentState = addTimelineEvent(currentState, 'start_button_clicked', 'Start button clicked successfully');
 
         // Wait after clicking start button (AI-detected buttons need time to transition)
@@ -522,19 +535,34 @@ export class QAAgent {
 
         // 3. Execute action
         try {
-          if (action.action === 'click' && action.x !== undefined && action.y !== undefined) {
-            await page.mouse.click(action.x, action.y);
-            currentState = addTimelineEvent(currentState, 'gameplay_action', `Click action: ${action.description}`, {
-              action: 'click',
-              x: action.x,
-              y: action.y,
-              decisionCycle: decisionCount,
-            });
-            logger.info('Click action executed', {
-              testId: currentState.testId,
-              x: action.x,
-              y: action.y,
-            });
+          if (action.action === 'click' && action.target) {
+            // Use Stagehand to click the element based on natural language description
+            const clickResult = await this.stagehandClient.clickElement(action.target);
+            
+            if (clickResult.success) {
+              currentState = addTimelineEvent(currentState, 'gameplay_action', `Click action: ${action.description}`, {
+                action: 'click',
+                target: action.target,
+                decisionCycle: decisionCount,
+              });
+              logger.info('Click action executed successfully', {
+                testId: currentState.testId,
+                target: action.target,
+              });
+            } else {
+              // Stagehand failed to click - log and skip (as per plan requirement)
+              logger.warn('Stagehand click action failed, skipping', {
+                testId: currentState.testId,
+                target: action.target,
+                error: clickResult.error,
+              });
+              currentState = addTimelineEvent(currentState, 'gameplay_action_skipped', `Click action skipped: ${action.description}`, {
+                action: 'click',
+                target: action.target,
+                decisionCycle: decisionCount,
+                error: clickResult.error,
+              });
+            }
           } else if (action.action === 'key_press' && action.key) {
             await page.keyboard.press(action.key);
             currentState = addTimelineEvent(currentState, 'gameplay_action', `Key press: ${action.key} - ${action.description}`, {
@@ -746,6 +774,7 @@ export class QAAgent {
         logger.info('Updating existing test run', { testRunId: state.testId });
         const { error: updateError } = await db
           .from('test_runs')
+          // @ts-expect-error - Supabase type inference issue with partial updates
           .update({
             status: result.status,
             playability_score: result.playability_score,
@@ -762,7 +791,7 @@ export class QAAgent {
               browserbaseUrl: null,
               browserbaseSessionId: null,
             } as any,
-          })
+          } as any)
           .eq('id', state.testId);
         
         if (updateError) {

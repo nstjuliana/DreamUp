@@ -1,10 +1,10 @@
 /**
  * File: src/browser/ui-pattern-detector.ts
  * 
- * UI pattern detection for game interaction using GPT-4o-mini vision.
+ * UI pattern detection for game interaction using Stagehand.
  * 
  * This module provides functions for detecting and interacting with game UI elements
- * using GPT-4o-mini vision API to analyze screenshots and determine click coordinates.
+ * using Stagehand's natural language click capabilities.
  * 
  * @module UIPatternDetector
  */
@@ -12,21 +12,19 @@
 import type { BrowserClient } from './browser-client.js';
 import type { Page } from 'playwright';
 import type { ManifestData } from '../storage/types.js';
-import { captureScreenshotBuffer, captureScreenshot } from './screenshot-capture.js';
-import { findStartButtonCoordinates } from '../agent/vision-action-planner.js';
+import { captureScreenshot } from './screenshot-capture.js';
 import { BrowserError } from '../utils/errors.js';
 import { logger } from '../utils/logger.js';
-import OpenAI from 'openai';
-import { getConfig } from '../utils/config.js';
+import type { StagehandClient } from './stagehand-client.js';
 
 /**
- * Button location result using vision AI.
+ * Button location result using Stagehand.
  */
 export interface ElementLocation {
-  /** Button coordinates (null if not found) */
-  coordinates: { x: number; y: number } | null;
-  /** Method used to find the element */
-  method: 'vision-detection' | 'not-found';
+  /** Whether the element was found and clicked successfully */
+  success: boolean;
+  /** Method used to find/click the element */
+  method: 'stagehand-click' | 'not-found';
   /** Screenshot URL if element not found */
   failureScreenshot?: string | null;
 }
@@ -60,168 +58,217 @@ async function captureStartButtonFailure(
 }
 
 /**
- * Find start button using GPT-4o-mini vision.
+ * Find and click start button using Stagehand.
  * 
- * Captures a screenshot and uses GPT-4o-mini vision API to locate the start button.
- * Returns coordinates for clicking.
+ * Uses Stagehand's natural language capabilities to identify and click the start button.
+ * Attempts common variations like "start button", "play button", "begin button".
  * 
  * @param {BrowserClient} client - Browser client instance
- * @returns {Promise<ElementLocation>} Element location result with coordinates
+ * @param {StagehandClient} stagehandClient - Stagehand client instance
+ * @param {string} testId - Test run identifier for logging and screenshots
+ * @returns {Promise<ElementLocation>} Element location result indicating success/failure
  * 
  * @example
  * ```typescript
- * const location = await findStartButton(client);
- * if (location.coordinates) {
- *   await clickElement(client, location);
+ * const location = await findStartButton(client, stagehandClient, 'test-123');
+ * if (location.success) {
+ *   logger.info('Start button clicked successfully');
  * }
  * ```
  */
 export async function findStartButton(
-  client: BrowserClient
+  client: BrowserClient,
+  stagehandClient: StagehandClient,
+  testId: string
 ): Promise<ElementLocation> {
-  const testId = 'unknown'; // Will be passed from caller in future
+  logger.info('Finding start button using Stagehand', { testId });
 
-  logger.info('Finding start button using GPT-4o-mini vision', { testId });
+  // Common variations of start button descriptions
+  const startButtonVariations = [
+    'start button',
+    'play button',
+    'begin button',
+    'start',
+    'play',
+    'begin',
+  ];
 
-  try {
-    // Capture screenshot buffer
-    const screenshotBuffer = await captureScreenshotBuffer(client, testId, 0);
-    if (!screenshotBuffer) {
-      logger.error('Failed to capture screenshot for start button detection', { testId });
-      const failureScreenshot = await captureStartButtonFailure(client, testId);
-      return {
-        coordinates: null,
-        method: 'not-found',
-        failureScreenshot,
-      };
-    }
-
-    // Convert to base64
-    const screenshotBase64 = screenshotBuffer.toString('base64');
-
-    // Initialize OpenAI client
-    const config = getConfig();
-    if (config.llm.provider !== 'openai') {
-      logger.error('OpenAI provider required for vision-based start button detection', {
-        provider: config.llm.provider,
-      });
-      const failureScreenshot = await captureStartButtonFailure(client, testId);
-      return {
-        coordinates: null,
-        method: 'not-found',
-        failureScreenshot,
-      };
-    }
-
-    const openaiClient = new OpenAI({
-      apiKey: config.llm.apiKey,
-    });
-
-    // Find start button coordinates using vision
-    const coordinates = await findStartButtonCoordinates(screenshotBase64, openaiClient);
-
-    if (coordinates) {
-      logger.info('Start button found using GPT-4o-mini vision', {
+  // Try each variation until one succeeds
+  for (const variation of startButtonVariations) {
+    try {
+      logger.debug('Attempting to click start button', { testId, variation });
+      
+      const result = await stagehandClient.clickElement(variation);
+      
+      if (result.success) {
+        logger.info('Start button clicked successfully using Stagehand', {
+          testId,
+          variation,
+        });
+        return {
+          success: true,
+          method: 'stagehand-click',
+        };
+      } else {
+        logger.debug('Start button click failed, trying next variation', {
+          testId,
+          variation,
+          error: result.error,
+        });
+      }
+    } catch (error) {
+      logger.debug('Error attempting to click start button', {
         testId,
-        x: coordinates.x,
-        y: coordinates.y,
+        variation,
+        error: error instanceof Error ? error.message : String(error),
       });
-
-      return {
-        coordinates,
-        method: 'vision-detection',
-      };
-    } else {
-      logger.warn('Start button not found using GPT-4o-mini vision', { testId });
-      const failureScreenshot = await captureStartButtonFailure(client, testId);
-      return {
-        coordinates: null,
-        method: 'not-found',
-        failureScreenshot,
-      };
+      // Continue to next variation
     }
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    logger.error('Failed to find start button using vision', {
-      testId,
-      error: message,
-    });
-    const failureScreenshot = await captureStartButtonFailure(client, testId);
-    return {
-      coordinates: null,
-      method: 'not-found',
-      failureScreenshot,
-    };
   }
+
+  // All variations failed
+  logger.warn('Start button not found using Stagehand - trying all variations', { testId });
+  const failureScreenshot = await captureStartButtonFailure(client, testId);
+  return {
+    success: false,
+    method: 'not-found',
+    failureScreenshot,
+  };
 }
 
 /**
- * Click an element using coordinates.
+ * Show visual click indicator overlay on page.
  * 
- * Uses Playwright's mouse API to click at the specified coordinates.
+ * Injects a visual overlay (crosshair and circle) at the specified coordinates
+ * to help debug click targeting issues.
  * 
- * @param {BrowserClient} client - Browser client instance
- * @param {ElementLocation} location - Element location from findStartButton
- * @returns {Promise<boolean>} True if click succeeded, false otherwise
- * @throws {BrowserError} If coordinates are not available
+ * @param {Page} page - Playwright page instance
+ * @param {number} x - X coordinate
+ * @param {number} y - Y coordinate
+ * @returns {Promise<void>}
+ */
+export async function showClickIndicator(page: Page, x: number, y: number): Promise<void> {
+  const overlayId = 'dreamup-click-indicator';
+  const overlayHTML = `
+    <div id="${overlayId}" style="
+      position: fixed;
+      left: 0;
+      top: 0;
+      width: 100vw;
+      height: 100vh;
+      pointer-events: none;
+      z-index: 999999;
+      display: block;
+    ">
+      <!-- Circle indicator -->
+      <div style="
+        position: absolute;
+        left: ${x - 15}px;
+        top: ${y - 15}px;
+        width: 30px;
+        height: 30px;
+        border: 3px solid #ff0000;
+        border-radius: 50%;
+        background: rgba(255, 0, 0, 0.2);
+        pointer-events: none;
+        box-shadow: 0 0 10px rgba(255, 0, 0, 0.5);
+      "></div>
+      <!-- Crosshair lines -->
+      <div style="
+        position: absolute;
+        left: ${x - 1}px;
+        top: ${y - 20}px;
+        width: 2px;
+        height: 40px;
+        background: #ff0000;
+        pointer-events: none;
+        box-shadow: 0 0 5px rgba(255, 0, 0, 0.8);
+      "></div>
+      <div style="
+        position: absolute;
+        left: ${x - 20}px;
+        top: ${y - 1}px;
+        width: 40px;
+        height: 2px;
+        background: #ff0000;
+        pointer-events: none;
+        box-shadow: 0 0 5px rgba(255, 0, 0, 0.8);
+      "></div>
+      <!-- Coordinate label -->
+      <div style="
+        position: absolute;
+        left: ${x + 20}px;
+        top: ${y - 20}px;
+        background: rgba(0, 0, 0, 0.8);
+        color: #ffffff;
+        padding: 4px 8px;
+        border-radius: 4px;
+        font-family: monospace;
+        font-size: 12px;
+        pointer-events: none;
+        white-space: nowrap;
+      ">(${x}, ${y})</div>
+    </div>
+  `;
+
+  await page.evaluate((html: string) => {
+    // Remove existing indicator if present
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const doc = (globalThis as any).document;
+    const existing = doc.getElementById('dreamup-click-indicator');
+    if (existing) {
+      existing.remove();
+    }
+    // Add new indicator
+    doc.body.insertAdjacentHTML('beforeend', html);
+  }, overlayHTML);
+
+  // Wait briefly for the indicator to be visible
+  await page.waitForTimeout(100);
+}
+
+/**
+ * Hide visual click indicator overlay.
  * 
- * @example
- * ```typescript
- * const location = await findStartButton(client);
- * if (location.coordinates) {
- *   await clickElement(client, location);
- * }
- * ```
+ * Removes the click indicator overlay from the page.
+ * 
+ * @param {Page} page - Playwright page instance
+ * @returns {Promise<void>}
+ */
+export async function hideClickIndicator(page: Page): Promise<void> {
+  await page.evaluate(() => {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const doc = (globalThis as any).document;
+    const indicator = doc.getElementById('dreamup-click-indicator');
+    if (indicator) {
+      indicator.remove();
+    }
+  });
+}
+
+/**
+ * Click an element using Stagehand (deprecated - kept for compatibility).
+ * 
+ * This function is kept for backward compatibility but is no longer needed
+ * since findStartButton now handles clicking directly via Stagehand.
+ * 
+ * @deprecated Use StagehandClient.clickElement() directly instead
  */
 export async function clickElement(
   client: BrowserClient,
-  location: ElementLocation
-): Promise<boolean> {
-  if (!location.coordinates) {
-    throw new BrowserError('Cannot click element - coordinates not available', {
-      method: location.method,
-      failureScreenshot: location.failureScreenshot,
-    });
+  location: ElementLocation,
+  options: { testId?: string; screenshotIndex?: number } = {}
+): Promise<{ success: boolean; indicatorScreenshotUrl?: string }> {
+  // If already successful (from findStartButton), just return success
+  if (location.success) {
+    return { success: true };
   }
-
-  const page = client.getPage();
-  const { x, y } = location.coordinates;
-
-  try {
-    logger.info('Clicking element using coordinates', {
-      method: location.method,
-      x,
-      y,
-    });
-
-    // Log element details
-    console.log('\n📋 ELEMENT DETAILS (Vision):');
-    console.log(`   Coordinates: (${x}, ${y})`);
-    console.log(`   Detection Method: ${location.method}`);
-    console.log('');
-
-    // Click at coordinates
-    await page.mouse.click(x, y);
-
-    logger.info('Element clicked successfully', {
-      x,
-      y,
-    });
-
-    return true;
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    logger.error('Failed to click element at coordinates', {
-      x,
-      y,
-      error: message,
-    });
-    throw new BrowserError(`Failed to click element: ${message}`, {
-      x,
-      y,
-      error: message,
-    });
-  }
+  
+  // Otherwise, element was not found
+  throw new BrowserError('Cannot click element - element not found', {
+    method: location.method,
+    failureScreenshot: location.failureScreenshot,
+  });
 }
 
 /**
