@@ -400,6 +400,9 @@ export class QAAgent {
         },
         {
           playability_score: evaluationResult.playabilityScore,
+          test_id: currentState.testId,
+          game_url: params.gameUrl,
+          game_name: params.gameName,
         }
       );
       
@@ -417,6 +420,9 @@ export class QAAgent {
       const errorResult = createErrorResult(message, {
         screenshots: currentState.screenshots,
         console_logs: currentState.consoleLogsUrl || null,
+        test_id: currentState.testId,
+        game_url: params.gameUrl,
+        game_name: params.gameName,
       });
       
       return { state: currentState, result: errorResult };

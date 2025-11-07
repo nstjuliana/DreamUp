@@ -19,6 +19,9 @@ import { validateUrl } from '../utils/validation.js';
 import { promptYesNo, promptText, promptSelect } from '../utils/prompt.js';
 import { parseManifest, readManifestFromFile, isValidLocalFile } from '../utils/manifest-parser.js';
 import { randomUUID } from 'crypto';
+import { executeBatch } from './batch-runner.js';
+import { outputBatchResult, convertToBatchResult } from './batch-output-formatter.js';
+import { getBatchReport } from '../storage/database.js';
 
 /**
  * Command options interface.
@@ -30,6 +33,12 @@ export interface CommandOptions {
   manifest?: string;
   /** Enable debug logging */
   debug?: boolean;
+  /** URL list file for batch testing */
+  list?: string;
+  /** Maximum concurrent processes for batch testing */
+  processes?: number;
+  /** Batch name for batch testing */
+  name?: string;
 }
 
 /**
@@ -454,6 +463,115 @@ async function executeTestCommand(gameUrlArg: string, options: CommandOptions): 
 }
 
 /**
+ * Execute batch test command.
+ * 
+ * Handles batch testing with parallel execution. Performs the following:
+ * 1. Reads URLs from list file
+ * 2. Validates all games exist and have manifests
+ * 3. Executes tests in parallel with concurrency limit
+ * 4. Aggregates results and outputs summary JSON
+ * 
+ * @param {CommandOptions} options - Command options
+ * @returns {Promise<void>}
+ */
+async function executeBatchCommand(options: CommandOptions): Promise<void> {
+  const startTime = Date.now();
+  
+  try {
+    // Set DEBUG environment variable if debug flag is passed
+    if (options.debug) {
+      process.env.DEBUG = 'true';
+    }
+    
+    if (!options.list) {
+      throw new ValidationError('URL list file is required. Use -l or --list to specify a file.');
+    }
+
+    const maxConcurrency = options.processes || 5;
+    
+    if (maxConcurrency < 1 || maxConcurrency > 50) {
+      throw new ValidationError('Concurrency must be between 1 and 50');
+    }
+
+    logger.info('Starting batch test execution', {
+      urlListFile: options.list,
+      maxConcurrency,
+      batchName: options.name,
+    });
+
+    // Execute batch
+    const executionResult = await executeBatch({
+      urlListFile: options.list,
+      maxConcurrency,
+      batchName: options.name,
+    });
+
+    // Fetch batch report from database
+    const batchReport = await getBatchReport(executionResult.batchReportId);
+    
+    if (!batchReport) {
+      throw new Error(`Batch report not found: ${executionResult.batchReportId}`);
+    }
+
+    // Convert to output format and output
+    const batchResult = convertToBatchResult(executionResult, batchReport);
+    outputBatchResult(batchResult);
+    
+    // Exit with appropriate code
+    const exitCode = executionResult.errorTests > 0 ? 1 : 0;
+    process.exit(exitCode);
+    
+  } catch (error) {
+    const duration_ms = Date.now() - startTime;
+    
+    if (error instanceof Error) {
+      logger.error('Batch command failed', { error: error.message, duration_ms });
+      
+      // Output error in batch result format
+      const errorResult = {
+        batch_report_id: '',
+        status: 'partial_failure' as const,
+        total_tests: 0,
+        passed_tests: 0,
+        failed_tests: 0,
+        error_tests: 1,
+        started_at: new Date().toISOString(),
+        duration_ms,
+        test_results: [{
+          url: options.list || 'unknown',
+          status: 'error' as const,
+          error: error.message,
+        }],
+      };
+      
+      outputBatchResult(errorResult);
+    } else {
+      logger.error('Batch command failed with unknown error', { error, duration_ms });
+      
+      const errorResult = {
+        batch_report_id: '',
+        status: 'partial_failure' as const,
+        total_tests: 0,
+        passed_tests: 0,
+        failed_tests: 0,
+        error_tests: 1,
+        started_at: new Date().toISOString(),
+        duration_ms,
+        test_results: [{
+          url: options.list || 'unknown',
+          status: 'error' as const,
+          error: String(error),
+        }],
+      };
+      
+      outputBatchResult(errorResult);
+    }
+    
+    process.exit(1);
+  }
+}
+
+/**
  * Create and configure CLI program.
  * 
  * Sets up the Commander.js program with all commands and options.
@@ -480,7 +598,17 @@ export function createProgram(): Command {
     .option('-u, --url <url>', 'Game URL to test (alternative to positional argument)')
     .option('-m, --manifest <path-or-version>', 'Use manifest from local file path or DB version name (e.g., "manifest.json" or "v1.0")')
     .option('-d, --debug', 'Enable debug logging')
-    .action(executeTestCommand);
+    .option('-l, --list <file>', 'URL list file for batch testing (one URL per line)')
+    .option('-p, --processes <number>', 'Maximum concurrent processes for batch testing (default: 5)', (value) => parseInt(value, 10))
+    .option('-n, --name <name>', 'Optional name for batch test')
+    .action(async (gameUrlArg: string, options: CommandOptions) => {
+      // Check if batch mode (--list flag provided)
+      if (options.list) {
+        await executeBatchCommand(options);
+      } else {
+        await executeTestCommand(gameUrlArg, options);
+      }
+    });
 
   return program;
 }

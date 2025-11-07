@@ -134,6 +134,50 @@ export interface Database {
           metadata?: Json;
         };
       };
+      batch_reports: {
+        Row: {
+          id: string;
+          batch_name: string | null;
+          status: 'running' | 'completed' | 'partial_failure';
+          total_tests: number;
+          passed_tests: number;
+          failed_tests: number;
+          error_tests: number;
+          test_run_ids: string[];
+          started_at: string;
+          completed_at: string | null;
+          execution_method: 'cli' | 'web' | null;
+          metadata: Json;
+        };
+        Insert: {
+          id?: string;
+          batch_name?: string | null;
+          status: 'running' | 'completed' | 'partial_failure';
+          total_tests?: number;
+          passed_tests?: number;
+          failed_tests?: number;
+          error_tests?: number;
+          test_run_ids?: string[];
+          started_at?: string;
+          completed_at?: string | null;
+          execution_method?: 'cli' | 'web' | null;
+          metadata?: Json;
+        };
+        Update: {
+          id?: string;
+          batch_name?: string | null;
+          status?: 'running' | 'completed' | 'partial_failure';
+          total_tests?: number;
+          passed_tests?: number;
+          failed_tests?: number;
+          error_tests?: number;
+          test_run_ids?: string[];
+          started_at?: string;
+          completed_at?: string | null;
+          execution_method?: 'cli' | 'web' | null;
+          metadata?: Json;
+        };
+      };
     };
     Views: {
       [_ in never]: never;
@@ -159,6 +203,10 @@ export type GameManifestUpdate = Database['public']['Tables']['game_manifests'][
 export type TestRun = Database['public']['Tables']['test_runs']['Row'];
 export type TestRunInsert = Database['public']['Tables']['test_runs']['Insert'];
 export type TestRunUpdate = Database['public']['Tables']['test_runs']['Update'];
+
+export type BatchReport = Database['public']['Tables']['batch_reports']['Row'];
+export type BatchReportInsert = Database['public']['Tables']['batch_reports']['Insert'];
+export type BatchReportUpdate = Database['public']['Tables']['batch_reports']['Update'];
 
 // Game manifest structure (from manifest_data JSONB field)
 export interface ManifestData {
