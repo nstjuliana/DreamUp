@@ -486,6 +486,15 @@ export class QAAgent {
     let decisionCount = 0;
     let screenshotIndex = currentState.screenshots.length;
     let previousScreenshotBase64: string | undefined = undefined;
+    
+    // Store screenshot buffers for batch upload after gameplay
+    interface PendingScreenshot {
+      buffer: Buffer;
+      index: number;
+      timestamp: number;
+      decisionCycle: number;
+    }
+    const pendingScreenshots: PendingScreenshot[] = [];
 
     // AI decision loop - runs until duration expires
     while (Date.now() - startTime < durationMs) {
@@ -609,29 +618,23 @@ export class QAAgent {
           });
         }
 
-        // 4. Store screenshot in state for evaluation
-        try {
-          const screenshotUrl = await uploadScreenshot(screenshotBuffer, currentState.testId, screenshotIndex);
-          if (screenshotUrl) {
-            currentState = addScreenshot(currentState, screenshotUrl);
-            currentState = addTimelineEvent(currentState, 'screenshot_captured', `Screenshot captured during gameplay (cycle ${decisionCount})`, {
-              index: screenshotIndex,
-              url: screenshotUrl,
-              decisionCycle: decisionCount,
-            });
-            screenshotIndex++;
-            logger.debug('Screenshot stored in state', {
-              testId: currentState.testId,
-              index: screenshotIndex - 1,
-              url: screenshotUrl,
-            });
-          }
-        } catch (uploadError) {
-          logger.warn('Failed to upload screenshot', {
-            testId: currentState.testId,
-            error: uploadError instanceof Error ? uploadError.message : String(uploadError),
-          });
-        }
+        // 4. Store screenshot buffer for batch upload after gameplay
+        // Store with timestamp and metadata for later upload
+        pendingScreenshots.push({
+          buffer: screenshotBuffer,
+          index: screenshotIndex,
+          timestamp: Date.now(),
+          decisionCycle: decisionCount,
+        });
+        
+        logger.debug('Screenshot buffer stored for batch upload', {
+          testId: currentState.testId,
+          index: screenshotIndex,
+          decisionCycle: decisionCount,
+          pendingCount: pendingScreenshots.length,
+        });
+        
+        screenshotIndex++;
 
         // 5. Wait before next decision
         const waitTime = Math.min(aiDecisionInterval, remainingTime);
@@ -653,19 +656,95 @@ export class QAAgent {
     }
 
     const totalDuration = Date.now() - startTime;
-    const screenshotsCaptured = currentState.screenshots.length - state.screenshots.length;
     
     logger.info('Vision-based gameplay simulation completed', {
       testId: currentState.testId,
       totalDecisions: decisionCount,
       totalDuration,
-      screenshotsCaptured,
+      screenshotsToUpload: pendingScreenshots.length,
+    });
+
+    // Upload all screenshots in parallel after gameplay completes
+    logger.info('Starting batch upload of gameplay screenshots', {
+      testId: currentState.testId,
+      count: pendingScreenshots.length,
+    });
+    
+    const uploadStartTime = Date.now();
+    const uploadPromises = pendingScreenshots.map(async (pending) => {
+      try {
+        // Use the timestamp from when screenshot was captured
+        const { uploadScreenshot } = await import('../storage/file-storage.js');
+        const screenshotUrl = await uploadScreenshot(
+          pending.buffer,
+          currentState.testId,
+          pending.index,
+          pending.timestamp
+        );
+        
+        return {
+          url: screenshotUrl,
+          index: pending.index,
+          decisionCycle: pending.decisionCycle,
+          timestamp: pending.timestamp,
+        };
+      } catch (uploadError) {
+        logger.warn('Failed to upload screenshot in batch', {
+          testId: currentState.testId,
+          index: pending.index,
+          error: uploadError instanceof Error ? uploadError.message : String(uploadError),
+        });
+        return null;
+      }
+    });
+    
+    // Wait for all uploads to complete
+    const uploadResults = await Promise.all(uploadPromises);
+    const uploadDuration = Date.now() - uploadStartTime;
+    
+    // Sort results by index to maintain order
+    const sortedResults = uploadResults
+      .filter((result): result is NonNullable<typeof result> => result !== null)
+      .sort((a, b) => a.index - b.index);
+    
+    // Add screenshots to state in order with correct timestamps
+    // Use timeline startTime for consistency (it's the canonical test start time)
+    const timelineStartTimeMs = new Date(currentState.timeline.startTime).getTime();
+    for (const result of sortedResults) {
+      currentState = addScreenshot(currentState, result.url);
+      
+      // Calculate elapsedMs from capture timestamp relative to test start
+      const captureTimeMs = result.timestamp;
+      const elapsedMs = captureTimeMs - timelineStartTimeMs;
+      
+      currentState = addTimelineEvent(
+        currentState,
+        'screenshot_captured',
+        `Screenshot captured during gameplay (cycle ${result.decisionCycle})`,
+        {
+          index: result.index,
+          url: result.url,
+          decisionCycle: result.decisionCycle,
+          timestamp: result.timestamp,
+        },
+        elapsedMs // Use custom elapsedMs based on capture timestamp
+      );
+    }
+    
+    const screenshotsCaptured = sortedResults.length;
+    
+    logger.info('Batch upload completed', {
+      testId: currentState.testId,
+      uploaded: screenshotsCaptured,
+      failed: pendingScreenshots.length - screenshotsCaptured,
+      uploadDurationMs: uploadDuration,
     });
 
     currentState = addTimelineEvent(currentState, 'gameplay_complete', 'Vision-based gameplay simulation completed', {
       totalDecisions: decisionCount,
       totalDurationMs: totalDuration,
       screenshotsCaptured,
+      batchUploadDurationMs: uploadDuration,
     });
 
     return currentState;

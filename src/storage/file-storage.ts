@@ -110,6 +110,7 @@ export async function ensureBucketExists(): Promise<void> {
  * @param {Buffer} buffer - Screenshot image buffer
  * @param {string} testId - Unique test run identifier
  * @param {number} index - Screenshot index (for ordering multiple screenshots)
+ * @param {number} [timestamp] - Optional timestamp from when screenshot was captured (defaults to now)
  * @returns {Promise<string>} Public URL of uploaded screenshot
  * @throws {StorageError} If upload fails
  * 
@@ -117,21 +118,27 @@ export async function ensureBucketExists(): Promise<void> {
  * ```typescript
  * const url = await uploadScreenshot(imageBuffer, 'test-123', 0);
  * console.log(`Screenshot uploaded: ${url}`);
+ * 
+ * // With capture timestamp
+ * const url = await uploadScreenshot(imageBuffer, 'test-123', 0, captureTimestamp);
  * ```
  */
 export async function uploadScreenshot(
   buffer: Buffer,
   testId: string,
-  index: number
+  index: number,
+  timestamp?: number
 ): Promise<string> {
   const client = getStorageClient();
   
   // Ensure bucket exists before uploading
   await ensureBucketExists();
   
-  // Construct file path: artifacts/{testId}/screenshots/{index}.png
-  const timestamp = Date.now();
-  const fileName = `${String(index).padStart(3, '0')}-${timestamp}.png`;
+  // Use provided timestamp or current time
+  const fileTimestamp = timestamp || Date.now();
+  
+  // Construct file path: artifacts/{testId}/screenshots/{index}-{timestamp}.png
+  const fileName = `${String(index).padStart(3, '0')}-${fileTimestamp}.png`;
   const filePath = `${testId}/screenshots/${fileName}`;
   
   try {

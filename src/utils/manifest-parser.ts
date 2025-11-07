@@ -143,11 +143,10 @@ export function parseManifest(manifestData: Json): ManifestData {
 
   const manifest = manifestData as Record<string, unknown>;
 
-  // Validate version
-  if (manifest.version !== '1.0') {
-    throw new ValidationError(`Unsupported manifest version: ${manifest.version}`, {
+  // Validate version (must be a non-empty string)
+  if (!manifest.version || typeof manifest.version !== 'string' || manifest.version.trim().length === 0) {
+    throw new ValidationError(`Manifest must include a valid version string`, {
       version: manifest.version,
-      expectedVersion: '1.0',
     });
   }
 
@@ -223,7 +222,7 @@ export function parseManifest(manifestData: Json): ManifestData {
 
   // Build validated manifest
   const parsed: ManifestData = {
-    version: '1.0',
+    version: manifest.version as ManifestData['version'],
     gameType: manifest.gameType as ManifestData['gameType'],
     controls: {
       primary: controls.primary as string[],

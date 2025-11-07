@@ -43,10 +43,10 @@ export function ManifestBuilder({ initialData, onSave, isSubmitting }: ManifestB
 
   // Gameplay config
   const [loadingDuration, setLoadingDuration] = useState<number>(
-    initialData?.loadingDuration || 3000
+    initialData?.loadingDuration !== undefined ? initialData.loadingDuration : 3000
   )
   const [gameplayDuration, setGameplayDuration] = useState<number>(
-    initialData?.gameplayDuration || 45000
+    initialData?.gameplayDuration !== undefined ? initialData.gameplayDuration : 45000
   )
   const [gameplayGoal, setGameplayGoal] = useState<string>(
     initialData?.gameplayGoal || 'Play the game as effectively as possible'

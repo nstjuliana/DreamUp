@@ -162,7 +162,7 @@ export type TestRunUpdate = Database['public']['Tables']['test_runs']['Update'];
 
 // Game manifest structure (from manifest_data JSONB field)
 export interface ManifestData {
-  version: '1.0';
+  version: string; // Any version string (e.g., '1.0', '1.1', '2.0', etc.)
   gameType: 'puzzle' | 'platformer' | 'idle' | 'shooter' | 'rpg' | 'other';
   controls: {
     primary: string[];

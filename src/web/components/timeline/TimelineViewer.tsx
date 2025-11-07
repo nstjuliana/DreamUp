@@ -76,11 +76,13 @@ export function TimelineViewer({ events, screenshots = [], className }: Timeline
   const [filter, setFilter] = useState<EventFilter>('all')
   const [selectedEvent, setSelectedEvent] = useState<TimelineEvent | null>(null)
 
-  const filteredEvents = events.filter((event) => {
-    if (filter === 'errors') return event.type === 'error'
-    if (filter === 'screenshots') return event.type === 'screenshot_captured'
-    return true
-  })
+  const filteredEvents = events
+    .filter((event) => {
+      if (filter === 'errors') return event.type === 'error'
+      if (filter === 'screenshots') return event.type === 'screenshot_captured'
+      return true
+    })
+    .sort((a, b) => a.elapsedMs - b.elapsedMs) // Sort by elapsed time to ensure chronological order
 
   const getScreenshotForEvent = (event: TimelineEvent): string | null => {
     if (event.type === 'screenshot_captured' && event.metadata?.url) {
