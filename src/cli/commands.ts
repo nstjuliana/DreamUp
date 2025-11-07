@@ -54,6 +54,12 @@ async function executeTestCommand(gameUrlArg: string, options: CommandOptions): 
   const startTime = Date.now();
   
   try {
+    // Set DEBUG environment variable if debug flag is passed
+    // This allows BrowserClient to detect debug mode and run in headed mode
+    if (options.debug) {
+      process.env.DEBUG = 'true';
+    }
+    
     // Get URL from argument or --url option
     const gameUrl = gameUrlArg || options.url;
     

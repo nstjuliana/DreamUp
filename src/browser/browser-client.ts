@@ -66,9 +66,16 @@ export class BrowserClient {
       } else {
         logger.info('Initializing new browser session with standard Playwright');
         
+        // Determine headless mode: default to true unless debug mode is enabled
+        // Debug mode is enabled via -d/--debug CLI flag or DEBUG=true environment variable
+        const isDebugMode = process.env.DEBUG === 'true' || process.env.DEBUG === '1';
+        const headless = !isDebugMode;
+        
+        logger.info('Browser launch configuration', { headless, debugMode: isDebugMode });
+        
         // Launch Chromium browser
         this.browser = await chromium.launch({
-          headless: false, // Show browser for debugging
+          headless: headless,
         });
         
         // Create new context
