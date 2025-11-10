@@ -15,7 +15,7 @@ import { join } from 'path';
 import { logger } from '../utils/logger.js';
 import { ValidationError } from '../utils/errors.js';
 import { validateUrl } from '../utils/validation.js';
-import { findGameByUrl, getActiveManifest, createBatchReport, updateBatchReport } from '../storage/database.js';
+import { findGameByUrl, getActiveManifest, createBatchReport, updateBatchReport, getTestHistory } from '../storage/database.js';
 import type { TestResult } from './output-formatter.js';
 import type { BatchReportInsert } from '../storage/types.js';
 
@@ -430,25 +430,50 @@ export async function executeBatch(options: BatchOptions): Promise<BatchExecutio
   const testResults = await pLimit(valid, options.maxConcurrency, executeSingleTest);
   results.push(...testResults);
 
-  // Aggregate results
+  // Aggregate results and try to find test_run_ids for tests that don't have them
   let passedTests = 0;
   let failedTests = 0;
   let errorTests = 0;
   const testRunIds: string[] = [];
 
   for (const result of results) {
+    // Collect testRunId for all results that have one (regardless of status)
+    if (result.testRunId) {
+      testRunIds.push(result.testRunId);
+    } else {
+      // If testRunId is missing, try to find the most recent test run for this game URL
+      // This can happen if the test completed but the test_id wasn't in the JSON output
+      try {
+        const game = await findGameByUrl(result.url);
+        if (game) {
+          const recentTests = await getTestHistory(game.id, 1);
+          if (recentTests.length > 0 && recentTests[0]) {
+            const recentTest = recentTests[0];
+            // Check if this test run was created during this batch execution
+            const testCreatedAt = new Date(recentTest.created_at).getTime();
+            const batchStartedAt = new Date(batchReport.started_at).getTime();
+            const batchCompletedAt = Date.now(); // Approximate completion time
+            
+            // If test was created during batch execution window, include it
+            if (testCreatedAt >= batchStartedAt - 5000 && testCreatedAt <= batchCompletedAt + 5000) {
+              testRunIds.push(recentTest.id);
+              logger.debug('Found test run ID from database', { url: result.url, testRunId: recentTest.id });
+            }
+          }
+        }
+      } catch (error) {
+        // Don't fail the batch if we can't look up test runs
+        logger.debug('Could not find test run ID from database', { url: result.url, error: error instanceof Error ? error.message : String(error) });
+      }
+    }
+    
+    // Categorize by status
     if (result.success) {
       passedTests++;
-      if (result.testRunId) {
-        testRunIds.push(result.testRunId);
-      }
     } else if (result.result?.status === 'error' || result.error) {
       errorTests++;
     } else {
       failedTests++;
-      if (result.testRunId) {
-        testRunIds.push(result.testRunId);
-      }
     }
   }
 
@@ -478,6 +503,8 @@ export async function executeBatch(options: BatchOptions): Promise<BatchExecutio
     passedTests,
     failedTests,
     errorTests,
+    testRunIdsCount: testRunIds.length,
+    testRunIds: testRunIds,
     duration_ms,
   });
 

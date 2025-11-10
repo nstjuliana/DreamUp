@@ -110,7 +110,7 @@ export default async function BatchReportDetailPage({
         <div>
           <h1 className="text-3xl font-bold tracking-tight">Batch Report Not Found</h1>
           <p className="text-muted-foreground mt-2">
-            The batch report you're looking for doesn't exist.
+            The batch report you&apos;re looking for doesn&apos;t exist.
           </p>
         </div>
         <Button asChild>
