@@ -14,6 +14,9 @@ import { formatDate, formatDuration } from '@/lib/utils'
 import { GAME_TYPES } from '@/lib/constants'
 import type { Game, GameManifest, TestRun } from '@/lib/types'
 
+// Disable caching for this page in development
+export const dynamic = 'force-dynamic'
+
 async function getGame(id: string): Promise<Game | null> {
   const { data, error } = await supabase
     .from('games')

@@ -7,7 +7,8 @@
   "scripts": {
     "start": "tsx qa.ts",
     "dev": "tsx watch qa.ts",
-    "type-check": "tsc --noEmit"
+    "type-check": "tsc --noEmit",
+    "test:vision": "tsx test-vision.ts"
   },
   "keywords": [
     "qa",
@@ -19,10 +20,12 @@
   "author": "",
   "license": "MIT",
   "dependencies": {
-    "@browserbasehq/stagehand": "^1.6.0",
+    "@browserbasehq/stagehand": "^3.0.1",
     "@supabase/supabase-js": "^2.39.0",
     "commander": "^11.1.0",
+    "dotenv": "^17.2.3",
     "openai": "^4.24.1",
+    "playwright": "^1.40.0",
     "zod": "^3.25.76"
   },
   "devDependencies": {

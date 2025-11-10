@@ -16,6 +16,10 @@
  * @module QA
  */
 
+// Load environment variables from .env file FIRST, before any other imports
+import { config } from 'dotenv';
+config();
+
 import { runCLI } from './src/cli/commands.js';
 import { logger, LogLevel } from './src/utils/logger.js';
 import { getConfig } from './src/utils/config.js';

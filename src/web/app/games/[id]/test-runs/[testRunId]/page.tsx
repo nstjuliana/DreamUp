@@ -17,6 +17,9 @@ import { supabase } from '@/lib/supabase'
 import { formatDate, formatDuration } from '@/lib/utils'
 import type { TestRun, Game, GameManifest, TimelineEvent } from '@/lib/types'
 
+// Disable caching for this page in development
+export const dynamic = 'force-dynamic'
+
 async function getTestRun(testRunId: string): Promise<{
   testRun: TestRun
   game: Game

@@ -63,43 +63,57 @@ export function buildEvaluationPrompt(evidence: EvaluationEvidence): string {
 - **Type**: ${gameMetadata.type || 'Unknown'}
 - **URL**: ${gameMetadata.url}
 
-## Evaluation Criteria
+## Evaluation Criteria (Priority Order)
+
+**IMPORTANT: Evaluation Weighting**
+1. **Screenshots are PRIMARY evidence** (70% weight) - Most screenshots should appear different, showing game progression
+2. **Console warnings are MINOR** (5% weight) - Warnings alone should NOT cause failure
+3. **Critical errors + broken screenshots = failure** - Only fail if critical errors exist AND screenshots show the game is broken
 
 Evaluate the game based on these criteria:
 
-1. **Game Loads Successfully**
-   - Does the game UI render correctly?
-   - Are visual elements visible and properly sized?
-   - Is there any obvious loading failure or blank screen?
+1. **Screenshot Analysis (PRIMARY - 70% weight)**
+   - Do the screenshots show the game rendering correctly?
+   - Do most screenshots appear different, indicating the game is progressing/changing?
+   - Are visual elements visible and properly sized across screenshots?
+   - Is there any obvious loading failure, blank screen, or frozen state?
+   - **A game with varied, functional-looking screenshots should generally PASS, even with console warnings**
 
 2. **Controls Are Responsive**
    - Can players interact with the game?
    - Do buttons/keyboard inputs appear to work?
-   - Is there evidence of user interaction?
+   - Is there evidence of user interaction in the screenshots?
 
-3. **No Critical Errors**
-   - Are there console errors that would prevent gameplay?
-   - Are there visual glitches or crashes?
-   - Does the game appear stable?
+3. **Console Log Analysis (SECONDARY - 30% weight)**
+   - **Warnings**: These are minor issues and should only result in a small score penalty (1-5 points). Warnings alone should NOT cause a failure.
+   - **Critical Errors**: Only consider these significant if they are combined with broken screenshots (blank screens, frozen state, obvious rendering failures). Critical errors with functional screenshots may indicate non-blocking issues.
+   - Distinguish between:
+     - **Non-critical warnings**: Deprecation warnings, minor API warnings, etc. (very small penalty, < 5 points)
+     - **Critical errors**: JavaScript exceptions, network failures, rendering crashes (only fail if screenshots also show broken state)
 
 4. **Visual Quality**
-   - Is the game visually readable?
+   - Is the game visually readable across screenshots?
    - Are UI elements properly positioned?
    - Is there any obvious rendering issues?
 
 ## Evidence Provided
 
-### Screenshots (${screenshotUrls.length} total)
+### Screenshots (${screenshotUrls.length} total) - PRIMARY EVIDENCE
 ${screenshotUrls.map((url, index) => `- Screenshot ${index + 1}: ${url}`).join('\n')}
 
-The screenshots show the game at different stages of execution. Analyze the visual state of the game in each screenshot.
+**Analyze screenshots FIRST and give them the most weight.** The screenshots show the game at different stages of execution. 
+- If screenshots show a functional, progressing game with varied visual states, the game should likely PASS
+- If screenshots show blank screens, frozen states, or obvious rendering failures, the game should likely FAIL
+- Screenshot diversity (different visual states) is a strong indicator of a working game
 
-### Console Logs
+### Console Logs - SECONDARY EVIDENCE
 \`\`\`
 ${consoleLogs || 'No console logs available'}
 \`\`\`
 
-Analyze the console logs for errors, warnings, or other issues that might affect playability.
+**Use console logs as supporting evidence, not primary.**
+- **Warnings**: Apply only a very small penalty (1-5 points). Do NOT fail a game solely because of warnings.
+- **Critical Errors**: Only consider these failure-worthy if screenshots ALSO show the game is broken (blank screens, frozen, etc.). If screenshots show a functional game despite errors, the errors may be non-blocking.
 
 `;
 
@@ -111,7 +125,6 @@ The game has a manifest with the following configuration:
 - **Game Type**: ${manifest.gameType}
 - **Controls**: ${manifest.controls.primary.join(', ')}${manifest.controls.secondary ? ` (secondary: ${manifest.controls.secondary.join(', ')})` : ''}
 - **Mouse Support**: ${manifest.controls.mouse ? 'Yes' : 'No'}
-${manifest.startButton ? `- **Start Button**: ${manifest.startButton.selector || manifest.startButton.text || 'Configured'}` : ''}
 
 Use this context to better understand what the game should be doing and whether it's functioning correctly.
 
@@ -131,10 +144,20 @@ Provide your evaluation as a JSON object with the following structure:
 Where:
 - **status**: "pass" if game is playable (score >= 70), "fail" if playable but has issues (score 50-69), "error" if unplayable (score < 50)
 - **playability_score**: Overall score from 0-100 (0 = completely broken, 100 = perfect)
+  - Base score primarily on screenshots (70%): functional, varied screenshots = high score
+  - Apply small penalty for warnings (1-5 points): warnings should NOT drop score below 70 if screenshots are good
+  - Only fail (score < 50) if critical errors exist AND screenshots show broken state
 - **issues**: Array of specific issues found (e.g., "Console errors detected", "UI elements not visible")
-- **reasoning**: Brief explanation of your assessment
+  - Only include warnings in issues if they are significant
+  - Focus on issues visible in screenshots or critical errors that affect gameplay
+- **reasoning**: Brief explanation of your assessment, emphasizing screenshot analysis
 
-Focus on actual playability - can a user successfully play this game? Consider visual state, errors, and responsiveness.`;
+**Evaluation Guidelines:**
+- **PASS (score >= 70)**: Screenshots show functional, progressing game. Warnings are minor and don't affect playability.
+- **FAIL (score 50-69)**: Screenshots show some issues but game appears mostly functional. May have non-critical errors.
+- **ERROR (score < 50)**: Screenshots show broken state (blank, frozen, obvious failures) AND critical errors exist.
+
+Focus on actual playability - can a user successfully play this game? Screenshots are the primary indicator. Console warnings should not cause failure. Only fail if critical errors are combined with broken screenshots.`;
 
   return prompt;
 }
@@ -149,11 +172,20 @@ Focus on actual playability - can a user successfully play this game? Consider v
 export function buildSystemMessage(): string {
   return `You are an expert QA tester specializing in browser game evaluation. Your task is to analyze screenshots and console logs to determine if a game is playable.
 
+**Evaluation Priority:**
+1. **Screenshots are PRIMARY** (70% weight) - Most screenshots should appear different, showing game progression
+2. **Console warnings are MINOR** (5% weight) - Warnings alone should NOT cause failure
+3. **Critical errors + broken screenshots = failure** - Only fail if critical errors exist AND screenshots show the game is broken
+
 Be thorough but concise. Focus on objective evidence:
-- Visual state of the game
-- Console errors and warnings
+- Visual state of the game (PRIMARY - analyze screenshots first)
+- Screenshot diversity (different visual states indicate working game)
+- Console errors (only significant if combined with broken screenshots)
+- Console warnings (very minor penalty, should not cause failure)
 - Signs of interactivity
 - Overall stability
+
+Remember: A game with functional, varied screenshots should generally PASS, even with console warnings. Only fail if critical errors are combined with broken screenshots.
 
 Provide your assessment as structured JSON.`;
 }

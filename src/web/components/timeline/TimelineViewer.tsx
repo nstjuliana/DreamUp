@@ -40,8 +40,10 @@ const EVENT_ICONS: Record<string, React.ReactNode> = {
   start_button_search_start: <MousePointer className="h-4 w-4 text-orange-600" />,
   start_button_found: <MousePointer className="h-4 w-4 text-orange-600" />,
   start_button_clicked: <MousePointer className="h-4 w-4 text-orange-600" />,
+  start_button_not_found: <MousePointer className="h-4 w-4 text-orange-600" />,
   console_logs_collected: <Terminal className="h-4 w-4 text-gray-600" />,
   gameplay_start: <Gamepad className="h-4 w-4 text-indigo-600" />,
+  gameplay_action: <MousePointer className="h-4 w-4 text-indigo-600" />,
   gameplay_complete: <Gamepad className="h-4 w-4 text-indigo-600" />,
   evaluation_start: <Star className="h-4 w-4 text-yellow-600" />,
   evaluation_complete: <Star className="h-4 w-4 text-yellow-600" />,
@@ -74,11 +76,13 @@ export function TimelineViewer({ events, screenshots = [], className }: Timeline
   const [filter, setFilter] = useState<EventFilter>('all')
   const [selectedEvent, setSelectedEvent] = useState<TimelineEvent | null>(null)
 
-  const filteredEvents = events.filter((event) => {
-    if (filter === 'errors') return event.type === 'error'
-    if (filter === 'screenshots') return event.type === 'screenshot_captured'
-    return true
-  })
+  const filteredEvents = events
+    .filter((event) => {
+      if (filter === 'errors') return event.type === 'error'
+      if (filter === 'screenshots') return event.type === 'screenshot_captured'
+      return true
+    })
+    .sort((a, b) => a.elapsedMs - b.elapsedMs) // Sort by elapsed time to ensure chronological order
 
   const getScreenshotForEvent = (event: TimelineEvent): string | null => {
     if (event.type === 'screenshot_captured' && event.metadata?.url) {

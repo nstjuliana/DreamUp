@@ -1,154 +1,102 @@
 /**
  * File: src/browser/browser-client.ts
  * 
- * Browser automation client using Browserbase and Stagehand.
+ * Browser automation client using local Playwright.
  * 
- * This module provides a wrapper around Stagehand for browser automation operations.
+ * This module provides a wrapper around Playwright for browser automation operations.
  * It handles session initialization, page navigation, waiting for page load, and cleanup.
- * Uses Browserbase for remote browser infrastructure.
+ * Uses local Chromium browser with fixed viewport for consistent game testing.
  * 
  * @module BrowserClient
  */
 
-import { Stagehand } from '@browserbasehq/stagehand';
-import type { Page } from '@browserbasehq/stagehand';
-import { getConfig } from '../utils/config.js';
+import { chromium, type Browser, type BrowserContext, type Page } from 'playwright';
 import { BrowserError } from '../utils/errors.js';
 import { logger } from '../utils/logger.js';
-import { MAX_EXECUTION_TIME_MS } from '../utils/constants.js';
 
 /**
  * Browser client for automation operations.
  */
 export class BrowserClient {
-  private stagehand: Stagehand | null = null;
+  private browser: Browser | null = null;
+  private context: BrowserContext | null = null;
   private page: Page | null = null;
-  private sessionId: string | null = null;
   
   /**
-   * Initialize browser session.
+   * Initialize browser session using page and context from Stagehand.
    * 
-   * Creates a new Browserbase session using Stagehand and initializes the browser.
-   * Sets up timeouts and configures the browser for game testing.
+   * Uses the page and context instances created by Stagehand to ensure only one browser exists.
+   * Sets up timeouts and configures the page for game testing.
    * 
+   * @param {Page} page - Playwright page instance from Stagehand
+   * @param {any} context - Playwright context instance from Stagehand
    * @returns {Promise<void>}
    * @throws {BrowserError} If session initialization fails
    * 
    * @example
    * ```typescript
+   * const stagehand = new StagehandClient();
+   * await stagehand.initialize();
    * const client = new BrowserClient();
-   * await client.initializeSession();
+   * await client.initializeSession(stagehand.getPage(), stagehand.getContext());
    * ```
    */
-  async initializeSession(): Promise<void> {
-    const config = getConfig();
-    
+  async initializeSession(page?: Page, context?: any): Promise<void> {
     try {
-      logger.info('Initializing browser session');
-      
-      // Initialize Stagehand with Browserbase
-      this.stagehand = new Stagehand({
-        apiKey: config.browserbase.apiKey,
-        projectId: config.browserbase.projectId,
-        env: 'BROWSERBASE',
-        enableCaching: false,
-        verbose: process.env.DEBUG === 'true' ? 1 : 0,
-      });
-      
-      // Initialize the browser
-      await this.stagehand.init();
-      
-      // Get the page instance
-      this.page = this.stagehand.page;
-      
-      // Try to extract session ID for live viewing
-      // Stagehand may expose this through the browser context or internal properties
-      try {
-        // Method 1: Try to get from browser context
-        // @ts-ignore - accessing internal property that may exist
-        const browserContext = this.page.context();
-        // @ts-ignore - Browserbase may attach session info
-        let sessionInfo = browserContext?._browserbaseSessionId || browserContext?.sessionId;
+      // If page and context provided (legacy Stagehand mode), use them
+      // Otherwise, create new browser with standard Playwright
+      if (page && context) {
+        logger.info('Initializing browser session from provided page and context');
+        this.page = page;
+        this.context = context;
         
-        // Method 2: Try to get from Stagehand instance properties
-        if (!sessionInfo) {
-          // @ts-ignore - Stagehand may expose session ID
-          sessionInfo = this.stagehand?.sessionId || this.stagehand?._sessionId || null;
+        if (this.context && typeof this.context.browser === 'function') {
+          this.browser = this.context.browser();
         }
         
-        // Method 3: Try to extract from browser context's browser instance
-        if (!sessionInfo && browserContext) {
-          // @ts-ignore - Browser instance may have session info
-          const browser = browserContext.browser();
-          if (browser) {
-            // @ts-ignore
-            sessionInfo = browser._sessionId || browser.sessionId || null;
-          }
+        // Set viewport if possible
+        if (this.page && typeof this.page.setViewportSize === 'function') {
+          await this.page.setViewportSize({ width: 1280, height: 720 });
         }
         
-        // Method 4: Try to get from page URL (Browserbase sessions sometimes expose it)
-        if (!sessionInfo) {
-          try {
-            const pageUrl = this.page.url();
-            // Browserbase session URLs might contain session ID
-            const sessionMatch = pageUrl.match(/session[_-]?id[=:]([a-zA-Z0-9_-]+)/i);
-            if (sessionMatch && sessionMatch[1]) {
-              sessionInfo = sessionMatch[1];
-            }
-          } catch {
-            // Ignore URL extraction errors
-          }
+        // Set default timeout if possible
+        if (this.page && typeof this.page.setDefaultTimeout === 'function') {
+          this.page.setDefaultTimeout(60000);
         }
+      } else {
+        logger.info('Initializing new browser session with standard Playwright');
         
-        if (sessionInfo) {
-          this.sessionId = String(sessionInfo);
-          logger.debug('Session ID extracted successfully', { sessionId: this.sessionId });
-        } else {
-          this.sessionId = null;
-          logger.debug('Session ID not found - will need to use Browserbase dashboard');
-        }
-      } catch (error) {
-        // Session ID extraction failed - not critical
-        this.sessionId = null;
-        logger.debug('Session ID extraction failed', {
-          error: error instanceof Error ? error.message : String(error),
+        // Determine headless mode: default to true unless debug mode is enabled
+        // Debug mode is enabled via -d/--debug CLI flag or DEBUG=true environment variable
+        const isDebugMode = process.env.DEBUG === 'true' || process.env.DEBUG === '1';
+        const headless = !isDebugMode;
+        
+        logger.info('Browser launch configuration', { headless, debugMode: isDebugMode });
+        
+        // Launch Chromium browser
+        this.browser = await chromium.launch({
+          headless: headless,
         });
+        
+        // Create new context
+        this.context = await this.browser.newContext({
+          viewport: { width: 1280, height: 720 },
+          userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        });
+        
+        // Create new page
+        this.page = await this.context.newPage();
+        
+        // Set default timeout
+        this.page.setDefaultTimeout(60000);
       }
       
-      // Set default timeout
-      await this.page.setDefaultTimeout(60000); // 60 seconds for operations
-      
-      const sessionUrl = this.getSessionUrl();
       logger.info('Browser session initialized', {
         hasPage: !!this.page,
-        sessionId: this.sessionId,
-        liveViewUrl: sessionUrl || 'Not available',
+        hasContext: !!this.context,
+        hasBrowser: !!this.browser,
+        viewport: '1280x720',
       });
-      
-      if (sessionUrl) {
-        logger.info('\n' + '='.repeat(60));
-        logger.info('🌐 LIVE BROWSER VIEW AVAILABLE 🌐');
-        logger.info('='.repeat(60));
-        logger.info(`\nWatch the browser in real-time:\n${sessionUrl}\n`);
-        logger.info('📋 Instructions:');
-        logger.info('   1. Copy the URL above');
-        logger.info('   2. Open it in your web browser');
-        logger.info('   3. You\'ll see the browser session in real-time');
-        logger.info('='.repeat(60) + '\n');
-      } else {
-        logger.info('\n' + '='.repeat(60));
-        logger.info('💡 HOW TO VIEW LIVE BROWSER SESSION');
-        logger.info('='.repeat(60));
-        logger.info('\nSession ID auto-detection failed, but you can still view it:');
-        logger.info('\n📋 Method 1: Browserbase Dashboard');
-        logger.info('   1. Go to: https://www.browserbase.com/sessions');
-        logger.info('   2. Log in to your Browserbase account');
-        logger.info('   3. Find the most recent session (it should be running now)');
-        logger.info('   4. Click on it to view live');
-        logger.info('\n📋 Method 2: Check Browser Logs');
-        logger.info('   The session ID may appear in verbose logs if DEBUG=true');
-        logger.info('='.repeat(60) + '\n');
-      }
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       logger.error('Failed to initialize browser session', { error: message });
@@ -395,27 +343,6 @@ export class BrowserClient {
     return this.page;
   }
 
-  /**
-   * Get the Stagehand instance.
-   * 
-   * Returns the Stagehand instance for AI-powered browser operations
-   * like observe() and act().
-   * 
-   * @returns {Stagehand} Stagehand instance
-   * @throws {BrowserError} If no active session
-   * 
-   * @example
-   * ```typescript
-   * const stagehand = client.getStagehand();
-   * const buttons = await stagehand.page.observe("Find the start button");
-   * ```
-   */
-  getStagehand(): Stagehand {
-    if (!this.stagehand) {
-      throw new BrowserError('Browser session not initialized');
-    }
-    return this.stagehand;
-  }
   
   /**
    * Close browser session and cleanup resources.
@@ -436,12 +363,12 @@ export class BrowserClient {
    */
   async closeSession(): Promise<void> {
     try {
-      if (this.stagehand) {
+      if (this.browser) {
         logger.info('Closing browser session');
-        await this.stagehand.close();
-        this.stagehand = null;
+        await this.browser.close();
+        this.browser = null;
+        this.context = null;
         this.page = null;
-        this.sessionId = null;
         logger.info('Browser session closed');
       }
     } catch (error) {
@@ -459,38 +386,6 @@ export class BrowserClient {
    * @returns {boolean} True if session is active
    */
   isActive(): boolean {
-    return this.page !== null && this.stagehand !== null;
-  }
-
-  /**
-   * Get the Browserbase session URL for live viewing.
-   * 
-   * Returns a URL that can be opened in a browser to view the session live.
-   * Only available if session ID was successfully extracted.
-   * 
-   * @returns {string | null} Browserbase session URL or null if not available
-   * 
-   * @example
-   * ```typescript
-   * const url = client.getSessionUrl();
-   * if (url) {
-   *   console.log(`View session: ${url}`);
-   * }
-   * ```
-   */
-  getSessionUrl(): string | null {
-    if (!this.sessionId) {
-      return null;
-    }
-    return `https://www.browserbase.com/sessions/${this.sessionId}`;
-  }
-
-  /**
-   * Get the Browserbase session ID.
-   * 
-   * @returns {string | null} Session ID or null if not available
-   */
-  getSessionId(): string | null {
-    return this.sessionId;
+    return this.page !== null && this.browser !== null;
   }
 }

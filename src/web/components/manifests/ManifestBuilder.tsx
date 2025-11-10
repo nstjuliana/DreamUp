@@ -23,7 +23,7 @@ import {
 } from '@/components/ui/card'
 import { Separator } from '@/components/ui/separator'
 import { Badge } from '@/components/ui/badge'
-import { GAME_TYPES, KEYBOARD_KEYS, MOUSE_ACTIONS, START_BUTTON_POSITIONS } from '@/lib/constants'
+import { GAME_TYPES, KEYBOARD_KEYS, MOUSE_ACTIONS } from '@/lib/constants'
 import type { ManifestData } from '@/lib/types'
 
 interface ManifestBuilderProps {
@@ -41,32 +41,18 @@ export function ManifestBuilder({ initialData, onSave, isSubmitting }: ManifestB
     initialData?.controls.mouseActions || []
   )
 
-  // Start button config
-  const [startButtonSelector, setStartButtonSelector] = useState<string>(
-    initialData?.startButton?.selector || ''
-  )
-  const [startButtonText, setStartButtonText] = useState<string>(
-    initialData?.startButton?.text || ''
-  )
-  const [startButtonPosition, setStartButtonPosition] = useState<string>(
-    initialData?.startButton?.position || 'center'
-  )
-  const [startButtonWait, setStartButtonWait] = useState<number>(
-    initialData?.startButton?.waitAfterClick || 2000
-  )
-
   // Gameplay config
   const [loadingDuration, setLoadingDuration] = useState<number>(
-    initialData?.loadingDuration || 3000
+    initialData?.loadingDuration !== undefined ? initialData.loadingDuration : 3000
   )
   const [gameplayDuration, setGameplayDuration] = useState<number>(
-    initialData?.gameplayDuration || 45000
+    initialData?.gameplayDuration !== undefined ? initialData.gameplayDuration : 45000
   )
   const [gameplayGoal, setGameplayGoal] = useState<string>(
     initialData?.gameplayGoal || 'Play the game as effectively as possible'
   )
   const [aiDecisionInterval, setAiDecisionInterval] = useState<number>(
-    initialData?.aiDecisionInterval || 2000
+    initialData?.aiDecisionInterval !== undefined ? initialData.aiDecisionInterval : 2000
   )
 
   const [notes, setNotes] = useState<string>(initialData?.notes || '')
@@ -108,20 +94,16 @@ export function ManifestBuilder({ initialData, onSave, isSubmitting }: ManifestB
         mouse: useMouse,
         mouseActions: mouseActions.length > 0 ? (mouseActions as any) : undefined,
       },
-      startButton: startButtonSelector || startButtonText || startButtonPosition !== 'center'
-        ? {
-            selector: startButtonSelector || undefined,
-            text: startButtonText || undefined,
-            position: startButtonPosition as any,
-            waitAfterClick: startButtonWait,
-          }
-        : undefined,
       loadingDuration,
       gameplayDuration,
       gameplayGoal,
-      aiDecisionInterval,
+      // Explicitly include aiDecisionInterval even if 0 (0 is a valid value to disable delays)
+      aiDecisionInterval: aiDecisionInterval,
       notes: notes || undefined,
     }
+
+    // Debug: log the value being sent
+    console.log('Submitting manifest with aiDecisionInterval:', manifestData.aiDecisionInterval)
 
     onSave(manifestData)
   }
@@ -136,19 +118,11 @@ export function ManifestBuilder({ initialData, onSave, isSubmitting }: ManifestB
         mouse: useMouse,
         mouseActions: mouseActions.length > 0 ? mouseActions : undefined,
       },
-      startButton:
-        startButtonSelector || startButtonText
-          ? {
-              selector: startButtonSelector || undefined,
-              text: startButtonText || undefined,
-              position: startButtonPosition,
-              waitAfterClick: startButtonWait,
-            }
-          : undefined,
       loadingDuration,
       gameplayDuration,
       gameplayGoal,
-      aiDecisionInterval,
+      // Explicitly include aiDecisionInterval even if 0 (0 is a valid value)
+      aiDecisionInterval: typeof aiDecisionInterval === 'number' ? aiDecisionInterval : undefined,
       notes: notes || undefined,
     },
     null,
@@ -291,70 +265,6 @@ export function ManifestBuilder({ initialData, onSave, isSubmitting }: ManifestB
           </CardContent>
         </Card>
 
-        {/* Start Button */}
-        <Card>
-          <CardHeader>
-            <CardTitle>Start Button Configuration</CardTitle>
-            <CardDescription>
-              Help the QA agent locate and click the start button
-            </CardDescription>
-          </CardHeader>
-          <CardContent className="space-y-4">
-            <div className="space-y-2">
-              <Label htmlFor="selector">CSS Selector (Optional)</Label>
-              <Input
-                id="selector"
-                placeholder="#start-button, .play-btn"
-                value={startButtonSelector}
-                onChange={(e) => setStartButtonSelector(e.target.value)}
-              />
-              <p className="text-xs text-muted-foreground">
-                Provide a CSS selector to directly locate the start button
-              </p>
-            </div>
-
-            <div className="space-y-2">
-              <Label htmlFor="button-text">Button Text (Optional)</Label>
-              <Input
-                id="button-text"
-                placeholder="Start Game, Play, Begin"
-                value={startButtonText}
-                onChange={(e) => setStartButtonText(e.target.value)}
-              />
-            </div>
-
-            <div className="space-y-2">
-              <Label htmlFor="position">Expected Position</Label>
-              <Select value={startButtonPosition} onValueChange={setStartButtonPosition}>
-                <SelectTrigger id="position">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  {START_BUTTON_POSITIONS.map((pos) => (
-                    <SelectItem key={pos} value={pos} className="capitalize">
-                      {pos}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-
-            <div className="space-y-2">
-              <Label htmlFor="wait">Wait After Click (ms)</Label>
-              <Input
-                id="wait"
-                type="number"
-                value={startButtonWait}
-                onChange={(e) => setStartButtonWait(parseInt(e.target.value) || 0)}
-                step={100}
-              />
-              <p className="text-xs text-muted-foreground">
-                Time to wait after clicking the start button before gameplay begins
-              </p>
-            </div>
-          </CardContent>
-        </Card>
-
         {/* Gameplay Configuration */}
         <Card>
           <CardHeader>
@@ -409,11 +319,15 @@ export function ManifestBuilder({ initialData, onSave, isSubmitting }: ManifestB
                 id="ai-interval"
                 type="number"
                 value={aiDecisionInterval}
-                onChange={(e) => setAiDecisionInterval(parseInt(e.target.value) || 0)}
+                onChange={(e) => {
+                  const value = e.target.value === '' ? 0 : parseInt(e.target.value, 10)
+                  setAiDecisionInterval(isNaN(value) ? 0 : value)
+                }}
+                min={0}
                 step={500}
               />
               <p className="text-xs text-muted-foreground">
-                Time between AI decisions during gameplay (default: 2000ms)
+                Time between AI decisions during gameplay (default: 2000ms). Set to 0 to disable delays.
               </p>
             </div>
           </CardContent>

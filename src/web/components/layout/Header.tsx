@@ -13,6 +13,7 @@ export function Header() {
 
   const navigation = [
     { name: 'Games', href: '/' },
+    { name: 'Batch Reports', href: '/batch-reports' },
   ]
 
   return (

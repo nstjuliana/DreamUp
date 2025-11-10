@@ -59,7 +59,7 @@ export const RETRY_BACKOFF_BASE_MS = 1000; // 1 second
  * Default loading duration for games without manifest specification (milliseconds).
  * Conservative estimate to allow games to fully load.
  */
-export const DEFAULT_LOADING_DURATION_MS = 5 * 1000; // 5 seconds
+export const DEFAULT_LOADING_DURATION_MS = 1000; // 5 seconds
 
 /**
  * Maximum console log size to store (characters).

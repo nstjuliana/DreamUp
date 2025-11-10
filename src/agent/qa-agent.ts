@@ -11,21 +11,26 @@
  */
 
 import { BrowserClient } from '../browser/browser-client.js';
-import { captureScreenshot, captureMultipleScreenshots } from '../browser/screenshot-capture.js';
+import { StagehandClient } from '../browser/stagehand-client.js';
+import { captureScreenshot, captureMultipleScreenshots, captureScreenshotBuffer } from '../browser/screenshot-capture.js';
 import { collectConsoleLogs, finalizeConsoleLogs } from '../browser/console-logger.js';
 import { findStartButton, clickElement } from '../browser/ui-pattern-detector.js';
 import type { ConsoleLogEntry } from '../browser/console-logger.js';
 import type { TestResult } from '../cli/output-formatter.js';
 import { createSuccessResult, createErrorResult, createTimeoutResult, outputTimeline } from '../cli/output-formatter.js';
 import { LLMEvaluator } from '../evaluation/llm-evaluator.js';
-import { parseManifest, getGameplayDuration, getScreenshotIntervals, getGameplayGoal, getAiDecisionInterval } from '../utils/manifest-parser.js';
+import { parseManifest, getGameplayDuration, getGameplayGoal, getAiDecisionInterval } from '../utils/manifest-parser.js';
 import { createAgentState, updatePhase, addScreenshot, setConsoleLogsUrl, setError, finalizeState, addTimelineEvent } from './agent-state.js';
 import type { AgentState } from './agent-state.js';
 import type { ManifestData, GameUpdate } from '../storage/types.js';
 import { saveTestRun, getDatabase } from '../storage/database.js';
-import { QAAgentError } from '../utils/errors.js';
+import { QAAgentError, StorageError } from '../utils/errors.js';
 import { logger } from '../utils/logger.js';
 import { MAX_EXECUTION_TIME_MS, DEFAULT_LOADING_DURATION_MS, START_BUTTON_WAIT_MS } from '../utils/constants.js';
+import { decideNextAction, type GameContext } from './vision-action-planner.js';
+import OpenAI from 'openai';
+import { getConfig } from '../utils/config.js';
+import { uploadScreenshot } from '../storage/file-storage.js';
 
 /**
  * QA agent execution result.
@@ -57,11 +62,13 @@ export interface QAAgentRunParams {
  */
 export class QAAgent {
   private browserClient: BrowserClient;
+  private stagehandClient: StagehandClient;
   private consoleLogEntries: ConsoleLogEntry[] = [];
   private llmEvaluator: LLMEvaluator;
   
   constructor() {
     this.browserClient = new BrowserClient();
+    this.stagehandClient = new StagehandClient();
     this.llmEvaluator = new LLMEvaluator();
   }
 
@@ -134,7 +141,7 @@ export class QAAgent {
 
       // Try to save to database (don't fail if this fails)
       try {
-        await this.saveResultsToDatabase(updatedState, result, params);
+        await this.saveResultsToDatabase(updatedState, result, params, duration_ms);
       } catch (dbError) {
         logger.error('Failed to save results to database', {
           testId: state.testId,
@@ -176,7 +183,7 @@ export class QAAgent {
 
       // Try to save error result to database
       try {
-        await this.saveResultsToDatabase(errorState, errorResult, params);
+        await this.saveResultsToDatabase(errorState, errorResult, params, duration_ms);
       } catch (dbError) {
         logger.error('Failed to save error results to database', {
           testId: state.testId,
@@ -190,6 +197,14 @@ export class QAAgent {
         duration_ms,
       };
     } finally {
+      // Always cleanup resources
+      try {
+        await this.stagehandClient.cleanup();
+      } catch (cleanupError) {
+        logger.warn('Error during Stagehand cleanup', {
+          error: cleanupError instanceof Error ? cleanupError.message : String(cleanupError),
+        });
+      }
       // Always close browser session
       await this.browserClient.closeSession();
     }
@@ -212,19 +227,21 @@ export class QAAgent {
     let currentState = state;
 
     try {
-      // Phase 1: Initialize browser session
+      // Phase 1: Initialize browser (using standard Playwright, not Stagehand)
+      // NOTE: Stagehand v3.0.1 has compatibility issues - disabling for now
       currentState = updatePhase(currentState, 'initializing');
-      currentState = addTimelineEvent(currentState, 'browser_init_start', 'Starting browser session initialization');
-      logger.info('Initializing browser session', { testId: currentState.testId });
+      currentState = addTimelineEvent(currentState, 'browser_init_start', 'Starting browser initialization');
+      logger.info('Initializing browser client', { testId: currentState.testId });
       await this.browserClient.initializeSession();
       
-      // Capture BrowserBase session URL for live viewing
-      const sessionUrl = this.browserClient.getSessionUrl();
-      const sessionId = this.browserClient.getSessionId();
-      currentState = addTimelineEvent(currentState, 'browser_init_complete', 'Browser session initialized', {
-        sessionUrl,
-        sessionId,
-      });
+      // Stagehand integration disabled due to compatibility issues
+      // await this.stagehandClient.initialize();
+      // const page = this.stagehandClient.getPage();
+      // const context = this.stagehandClient.getContext();
+      // await this.browserClient.initializeSession(page, context);
+      
+      // Browser session is local (no URL to capture)
+      currentState = addTimelineEvent(currentState, 'browser_init_complete', 'Browser session initialized from Stagehand');
 
       // Phase 2: Set up console log collection
       logger.info('Setting up console log collection', { testId: currentState.testId });
@@ -251,7 +268,6 @@ export class QAAgent {
 
       // Capture baseline screenshot
       logger.info('Capturing baseline screenshot', { testId: currentState.testId });
-      currentState = addTimelineEvent(currentState, 'screenshot_captured', 'Starting baseline screenshot capture');
       const screenshotStartTime = Date.now();
       
       // Capture screenshot buffer first
@@ -260,12 +276,6 @@ export class QAAgent {
       const captureDuration = Date.now() - screenshotStartTime;
       
       if (buffer) {
-        currentState = addTimelineEvent(currentState, 'screenshot_captured', 'Screenshot buffer captured', { 
-          index: 0,
-          captureDurationMs: captureDuration,
-          bufferSize: buffer.length
-        });
-        
         // Upload screenshot
         const uploadStartTime = Date.now();
         const { uploadScreenshot } = await import('../storage/file-storage.js');
@@ -274,7 +284,7 @@ export class QAAgent {
         
         if (baselineScreenshot) {
           currentState = addScreenshot(currentState, baselineScreenshot);
-          currentState = addTimelineEvent(currentState, 'screenshot_captured', 'Baseline screenshot uploaded', { 
+          currentState = addTimelineEvent(currentState, 'screenshot_captured', 'Baseline screenshot captured and uploaded', { 
             index: 0, 
             url: baselineScreenshot,
             captureDurationMs: captureDuration,
@@ -288,18 +298,17 @@ export class QAAgent {
       currentState = updatePhase(currentState, 'interacting');
       currentState = addTimelineEvent(currentState, 'phase_change', 'Entering interaction phase');
       
-      // Find and click start button using StageHand AI
-      currentState = addTimelineEvent(currentState, 'start_button_search_start', 'Searching for start button using Stagehand AI');
-      const startButtonLocation = await findStartButton(this.browserClient, currentState.manifest || null);
+      // Find and click start button (optional - some games don't have one)
+      // Stagehand disabled - using standard Playwright click
+      currentState = addTimelineEvent(currentState, 'start_button_search_start', 'Searching for start button');
+      const startButtonLocation = await findStartButton(this.browserClient, null, currentState.testId);
       
-      if (!startButtonLocation.element) {
-        // Start button not found - this is a critical failure
-        const errorMessage = 'Start button not found by StageHand AI. Cannot proceed with test.';
-        logger.error(errorMessage, {
+      if (!startButtonLocation.success) {
+        // Start button not found - log warning but continue (some games don't have start buttons)
+        logger.warn('Start button not found - continuing without clicking start button', {
           testId: currentState.testId,
           method: startButtonLocation.method,
           failureScreenshot: startButtonLocation.failureScreenshot,
-          allButtonsFound: startButtonLocation.allButtonsFound?.map(b => b.description),
         });
 
         // Add failure screenshot to state if available
@@ -307,66 +316,46 @@ export class QAAgent {
           currentState = addScreenshot(currentState, startButtonLocation.failureScreenshot);
         }
 
-        // Create detailed error message with diagnostic info
-        let detailedError = errorMessage;
-        if (startButtonLocation.allButtonsFound && startButtonLocation.allButtonsFound.length > 0) {
-          detailedError += `\n\nButtons found on page (${startButtonLocation.allButtonsFound.length}):`;
-          startButtonLocation.allButtonsFound.forEach((btn, i) => {
-            detailedError += `\n  ${i + 1}. ${btn.description} (${btn.method || 'no method'})`;
-          });
-        } else {
-          detailedError += '\n\nNo buttons found on page.';
-        }
+        currentState = addTimelineEvent(currentState, 'start_button_not_found', 'No start button found - game may start automatically');
+      } else {
+        // Button found and clicked successfully
+        logger.info('Start button clicked successfully using Stagehand', {
+          testId: currentState.testId,
+          method: startButtonLocation.method,
+        });
+        currentState = addTimelineEvent(currentState, 'start_button_found', 'Start button detected and clicked', {
+          method: startButtonLocation.method,
+        });
         
-        if (startButtonLocation.failureScreenshot) {
-          detailedError += `\n\nFailure screenshot: ${startButtonLocation.failureScreenshot}`;
+        currentState = addTimelineEvent(currentState, 'start_button_clicked', 'Start button clicked successfully');
+
+        // Wait after clicking start button (AI-detected buttons need time to transition)
+        await new Promise(resolve => setTimeout(resolve, START_BUTTON_WAIT_MS));
+
+        // Capture screenshot after start click
+        const afterStartScreenshot = await captureScreenshot(this.browserClient, currentState.testId, 1);
+        if (afterStartScreenshot) {
+          currentState = addScreenshot(currentState, afterStartScreenshot);
+          currentState = addTimelineEvent(currentState, 'screenshot_captured', 'Post-click screenshot captured', {
+            index: 1,
+            url: afterStartScreenshot,
+          });
         }
-
-        throw new Error(detailedError);
-      }
-
-      // Button found - click it
-      logger.info('Start button found using StageHand, clicking', {
-        testId: currentState.testId,
-        method: startButtonLocation.method,
-        description: startButtonLocation.element.description,
-      });
-      currentState = addTimelineEvent(currentState, 'start_button_found', 'Start button detected', {
-        method: startButtonLocation.method,
-        description: startButtonLocation.element.description,
-      });
-      
-      await clickElement(this.browserClient, startButtonLocation);
-      currentState = addTimelineEvent(currentState, 'start_button_clicked', 'Start button clicked successfully');
-
-      // Wait after clicking start button
-      const waitAfterClick = currentState.manifest?.startButton?.waitAfterClick || START_BUTTON_WAIT_MS;
-      await new Promise(resolve => setTimeout(resolve, waitAfterClick));
-
-      // Capture screenshot after start click
-      const afterStartScreenshot = await captureScreenshot(this.browserClient, currentState.testId, 1);
-      if (afterStartScreenshot) {
-        currentState = addScreenshot(currentState, afterStartScreenshot);
-        currentState = addTimelineEvent(currentState, 'screenshot_captured', 'Post-click screenshot captured', { index: 1 });
       }
 
       // Simulate gameplay
       const gameplayDuration = getGameplayDuration(currentState.manifest || null, 45000); // Default 45s
-      await this.simulateGameplay(currentState, gameplayDuration);
+      currentState = await this.simulateGameplay(currentState, gameplayDuration);
 
-      // Phase 5: Monitoring - capture remaining screenshots
+      // Phase 5: Monitoring - capture final screenshot
       currentState = updatePhase(currentState, 'monitoring');
-      const screenshotIntervals = getScreenshotIntervals(currentState.manifest || null);
-      
-      if (screenshotIntervals) {
-        // Time-based screenshot capture (null check above ensures non-null)
-        currentState = await this.captureScreenshotsTimeBased(currentState, screenshotIntervals as number[]);
-      } else {
-        // Event-based: capture final screenshot
-        const finalScreenshot = await captureScreenshot(this.browserClient, currentState.testId, currentState.screenshots.length);
-        if (finalScreenshot) {
-          currentState = addScreenshot(currentState, finalScreenshot as string);
-        }
+      const finalScreenshot = await captureScreenshot(this.browserClient, currentState.testId, currentState.screenshots.length);
+      if (finalScreenshot) {
+        currentState = addScreenshot(currentState, finalScreenshot as string);
+        currentState = addTimelineEvent(currentState, 'screenshot_captured', 'Final screenshot captured', {
+          index: currentState.screenshots.length - 1,
+          url: finalScreenshot,
+        });
       }
 
       // Finalize console logs
@@ -411,6 +400,9 @@ export class QAAgent {
         },
         {
           playability_score: evaluationResult.playabilityScore,
+          test_id: currentState.testId,
+          game_url: params.gameUrl,
+          game_name: params.gameName,
         }
       );
       
@@ -428,55 +420,28 @@ export class QAAgent {
       const errorResult = createErrorResult(message, {
         screenshots: currentState.screenshots,
         console_logs: currentState.consoleLogsUrl || null,
+        test_id: currentState.testId,
+        game_url: params.gameUrl,
+        game_name: params.gameName,
       });
       
       return { state: currentState, result: errorResult };
     }
   }
 
-  /**
-   * Build AI gameplay prompt for Stagehand.
-   * 
-   * Constructs a concise prompt for the AI to guide gameplay decisions.
-   * Stagehand's act() method already sees the screenshot, so we only need
-   * to provide essential context: game type, controls, and goal.
-   * 
-   * @param {string} gameType - Type of game (puzzle, platformer, etc.)
-   * @param {string[]} controls - Available control keys from manifest
-   * @param {string} goal - Gameplay goal/objective
-   * @returns {string} Concise prompt for AI action
-   * @private
-   */
-  private buildGameplayPrompt(
-    gameType: string,
-    controls: string[],
-    goal: string
-  ): string {
-    let prompt = `Play this ${gameType} game. `;
-    prompt += `Goal: ${goal}. `;
-    
-    if (controls.length > 0) {
-      prompt += `Use these controls: ${controls.join(', ')}.`;
-    } else {
-      prompt += `Use mouse controls.`;
-    }
-    
-    return prompt;
-  }
 
   /**
-   * Simulate gameplay using AI-powered decision making.
+   * Simulate gameplay using GPT-4o-mini vision-based decision making.
    * 
-   * Uses Stagehand's act() to intelligently play the game based on manifest controls
-   * and gameplay goals. Stagehand's act() method uses visual understanding from
-   * screenshots, so we provide only essential context (game type, controls, goal).
-   * The AI makes decisions at regular intervals and executes actions accordingly.
+   * Captures screenshots, sends them to GPT-4o-mini vision API to decide actions,
+   * executes actions using Playwright, and stores screenshots in state.
    * 
    * @param {AgentState} state - Agent state
    * @param {number} durationMs - Duration to simulate gameplay in milliseconds
+   * @returns {Promise<AgentState>} Updated agent state with screenshots from gameplay
    * @private
    */
-  private async simulateGameplay(state: AgentState, durationMs: number): Promise<void> {
+  private async simulateGameplay(state: AgentState, durationMs: number): Promise<AgentState> {
     const page = this.browserClient.getPage();
     
     // Extract game context from manifest
@@ -487,7 +452,26 @@ export class QAAgent {
     const gameplayGoal = getGameplayGoal(state.manifest || null);
     const aiDecisionInterval = getAiDecisionInterval(state.manifest || null);
 
-    logger.info('Starting AI-powered gameplay simulation', {
+    // Initialize OpenAI client
+    const config = getConfig();
+    if (config.llm.provider !== 'openai') {
+      logger.error('OpenAI provider required for vision-based gameplay', {
+        provider: config.llm.provider,
+      });
+      return state; // Return state unchanged if OpenAI not available
+    }
+
+    const openaiClient = new OpenAI({
+      apiKey: config.llm.apiKey,
+    });
+
+    const gameContext: GameContext = {
+      gameType,
+      controls: controls.primary,
+      goal: gameplayGoal,
+    };
+
+    logger.info('Starting vision-based gameplay simulation', {
       testId: state.testId,
       duration: durationMs,
       gameType,
@@ -496,8 +480,27 @@ export class QAAgent {
       aiDecisionInterval,
     });
 
+    let currentState = state;
+    currentState = addTimelineEvent(currentState, 'gameplay_start', 'Starting vision-based gameplay simulation', {
+      duration: durationMs,
+      gameType,
+      controls: controls.primary,
+      goal: gameplayGoal,
+    });
+    
     const startTime = Date.now();
     let decisionCount = 0;
+    let screenshotIndex = currentState.screenshots.length;
+    let previousScreenshotBase64: string | undefined = undefined;
+    
+    // Store screenshot buffers for batch upload after gameplay
+    interface PendingScreenshot {
+      buffer: Buffer;
+      index: number;
+      timestamp: number;
+      decisionCycle: number;
+    }
+    const pendingScreenshots: PendingScreenshot[] = [];
 
     // AI decision loop - runs until duration expires
     while (Date.now() - startTime < durationMs) {
@@ -507,62 +510,139 @@ export class QAAgent {
       try {
         decisionCount++;
         logger.info(`AI decision cycle ${decisionCount}`, {
-          testId: state.testId,
+          testId: currentState.testId,
           elapsedMs: elapsedTime,
           remainingMs: remainingTime,
+          hasPreviousScreenshot: !!previousScreenshotBase64,
         });
 
-        // Build concise action prompt - Stagehand's act() sees the screenshot visually
-        const actionPrompt = this.buildGameplayPrompt(
-          gameType,
-          controls.primary,
-          gameplayGoal
-        );
-
-        logger.debug('AI action prompt', {
-          testId: state.testId,
-          prompt: actionPrompt,
-        });
-
-        // Execute AI action - Stagehand uses visual understanding from screenshot
-        try {
-          await page.act(actionPrompt);
-          
-          logger.info('AI action executed successfully', {
-            testId: state.testId,
+        // 1. Capture screenshot
+        const screenshotBuffer = await captureScreenshotBuffer(this.browserClient, currentState.testId, screenshotIndex);
+        if (!screenshotBuffer) {
+          logger.warn('Failed to capture screenshot, skipping decision cycle', {
+            testId: currentState.testId,
             decisionNumber: decisionCount,
           });
-        } catch (actError) {
-          // Fallback: If AI action fails, press a random control key
-          logger.warn('AI action failed, falling back to keyboard control', {
-            testId: state.testId,
-            error: actError instanceof Error ? actError.message : String(actError),
-          });
-
-          if (controls.primary.length > 0) {
-            // Pick a random key from available controls
-            const randomIndex = Math.floor(Math.random() * controls.primary.length);
-            const randomKey = controls.primary[randomIndex];
-            
-            if (randomKey) {
-              try {
-                await page.keyboard.press(randomKey);
-                logger.info('Fallback keyboard action executed', {
-                  testId: state.testId,
-                  key: randomKey,
-                });
-              } catch (keyError) {
-                logger.error('Fallback keyboard action also failed', {
-                  testId: state.testId,
-                  key: randomKey,
-                  error: keyError instanceof Error ? keyError.message : String(keyError),
-                });
-              }
-            }
+          // Wait before next cycle
+          const waitTime = Math.min(aiDecisionInterval, remainingTime);
+          if (waitTime > 0) {
+            await new Promise(resolve => setTimeout(resolve, waitTime));
           }
+          continue;
         }
 
-        // Step 4: Wait for next decision interval (or remaining time, whichever is shorter)
+        // Convert to base64 for vision API
+        const screenshotBase64 = screenshotBuffer.toString('base64');
+
+        // 2. Decide action using vision (with previous screenshot for change detection)
+        const action = await decideNextAction(screenshotBase64, gameContext, openaiClient, previousScreenshotBase64);
+        
+        // Store current screenshot as previous for next iteration
+        previousScreenshotBase64 = screenshotBase64;
+
+        logger.debug('Action decision made', {
+          testId: currentState.testId,
+          action: action.action,
+          description: action.description,
+        });
+
+        // 3. Execute action
+        try {
+          if (action.action === 'click' && action.target) {
+            // Use Stagehand to click the element based on natural language description
+            const clickResult = await this.stagehandClient.clickElement(action.target);
+            
+            if (clickResult.success) {
+              currentState = addTimelineEvent(currentState, 'gameplay_action', `Click action: ${action.description}`, {
+                action: 'click',
+                target: action.target,
+                decisionCycle: decisionCount,
+              });
+              logger.info('Click action executed successfully', {
+                testId: currentState.testId,
+                target: action.target,
+              });
+            } else {
+              // Stagehand failed to click - log and skip (as per plan requirement)
+              logger.warn('Stagehand click action failed, skipping', {
+                testId: currentState.testId,
+                target: action.target,
+                error: clickResult.error,
+              });
+              currentState = addTimelineEvent(currentState, 'gameplay_action_skipped', `Click action skipped: ${action.description}`, {
+                action: 'click',
+                target: action.target,
+                decisionCycle: decisionCount,
+                error: clickResult.error,
+              });
+            }
+          } else if (action.action === 'key_press' && action.key) {
+            // Press key on the page (standard Playwright)
+            await page.keyboard.press(action.key);
+            currentState = addTimelineEvent(currentState, 'gameplay_action', `Key press: ${action.key} - ${action.description}`, {
+              action: 'key_press',
+              key: action.key,
+              decisionCycle: decisionCount,
+            });
+            logger.info('Key press action executed', {
+              testId: currentState.testId,
+              key: action.key,
+            });
+          } else if (action.action === 'wait' && action.duration !== undefined) {
+            // Use setTimeout instead of page.waitForTimeout (deprecated in Playwright)
+            await new Promise(resolve => setTimeout(resolve, action.duration));
+            currentState = addTimelineEvent(currentState, 'gameplay_action', `Wait action: ${action.description}`, {
+              action: 'wait',
+              duration: action.duration,
+              decisionCycle: decisionCount,
+            });
+            logger.info('Wait action executed', {
+              testId: currentState.testId,
+              duration: action.duration,
+            });
+          } else if (action.action === 'scroll') {
+            // Scroll down by default
+            await page.mouse.wheel(0, 300);
+            currentState = addTimelineEvent(currentState, 'gameplay_action', `Scroll action: ${action.description}`, {
+              action: 'scroll',
+              decisionCycle: decisionCount,
+            });
+            logger.info('Scroll action executed', {
+              testId: currentState.testId,
+            });
+          }
+        } catch (actionError) {
+          logger.warn('Action execution failed', {
+            testId: currentState.testId,
+            action: action.action,
+            error: actionError instanceof Error ? actionError.message : String(actionError),
+          });
+          currentState = addTimelineEvent(currentState, 'error', `Action execution failed: ${action.action}`, {
+            action: action.action,
+            error: actionError instanceof Error ? actionError.message : String(actionError),
+            decisionCycle: decisionCount,
+          });
+        }
+
+        // 4. Store screenshot buffer for batch upload after gameplay
+        // Store with timestamp and metadata for later upload
+        pendingScreenshots.push({
+          buffer: screenshotBuffer,
+          index: screenshotIndex,
+          timestamp: Date.now(),
+          decisionCycle: decisionCount,
+        });
+        
+        logger.debug('Screenshot buffer stored for batch upload', {
+          testId: currentState.testId,
+          index: screenshotIndex,
+          decisionCycle: decisionCount,
+          pendingCount: pendingScreenshots.length,
+        });
+        
+        screenshotIndex++;
+
+        // 5. Wait before next decision
         const waitTime = Math.min(aiDecisionInterval, remainingTime);
         if (waitTime > 0) {
           await new Promise(resolve => setTimeout(resolve, waitTime));
@@ -571,7 +651,7 @@ export class QAAgent {
       } catch (error) {
         // Catch any unexpected errors in decision loop
         logger.error('Error in AI gameplay decision loop', {
-          testId: state.testId,
+          testId: currentState.testId,
           decisionNumber: decisionCount,
           error: error instanceof Error ? error.message : String(error),
         });
@@ -581,51 +661,98 @@ export class QAAgent {
       }
     }
 
-    logger.info('AI gameplay simulation completed', {
-      testId: state.testId,
-      totalDecisions: decisionCount,
-      totalDuration: Date.now() - startTime,
-    });
-  }
-
-  /**
-   * Capture screenshots at time-based intervals.
-   * 
-   * @param {AgentState} state - Agent state
-   * @param {number[]} intervals - Screenshot intervals in milliseconds
-   * @returns {Promise<AgentState>} Updated agent state
-   * @private
-   */
-  private async captureScreenshotsTimeBased(state: AgentState, intervals: number[]): Promise<AgentState> {
-    logger.info('Capturing time-based screenshots', {
-      testId: state.testId,
-      intervals,
-    });
-
-    let currentState = state;
-    const startTime = Date.now();
+    const totalDuration = Date.now() - startTime;
     
-    for (let i = 0; i < intervals.length; i++) {
-      const interval = intervals[i];
-      if (interval === undefined) continue;
-      
-      const elapsed = Date.now() - startTime;
-      const waitTime = Math.max(0, interval - elapsed);
-      
-      if (waitTime > 0) {
-        await new Promise(resolve => setTimeout(resolve, waitTime));
+    logger.info('Vision-based gameplay simulation completed', {
+      testId: currentState.testId,
+      totalDecisions: decisionCount,
+      totalDuration,
+      screenshotsToUpload: pendingScreenshots.length,
+    });
+
+    // Upload all screenshots in parallel after gameplay completes
+    logger.info('Starting batch upload of gameplay screenshots', {
+      testId: currentState.testId,
+      count: pendingScreenshots.length,
+    });
+    
+    const uploadStartTime = Date.now();
+    const uploadPromises = pendingScreenshots.map(async (pending) => {
+      try {
+        // Use the timestamp from when screenshot was captured
+        const { uploadScreenshot } = await import('../storage/file-storage.js');
+        const screenshotUrl = await uploadScreenshot(
+          pending.buffer,
+          currentState.testId,
+          pending.index,
+          pending.timestamp
+        );
+        
+        return {
+          url: screenshotUrl,
+          index: pending.index,
+          decisionCycle: pending.decisionCycle,
+          timestamp: pending.timestamp,
+        };
+      } catch (uploadError) {
+        logger.warn('Failed to upload screenshot in batch', {
+          testId: currentState.testId,
+          index: pending.index,
+          error: uploadError instanceof Error ? uploadError.message : String(uploadError),
+        });
+        return null;
       }
+    });
+    
+    // Wait for all uploads to complete
+    const uploadResults = await Promise.all(uploadPromises);
+    const uploadDuration = Date.now() - uploadStartTime;
+    
+    // Sort results by index to maintain order
+    const sortedResults = uploadResults
+      .filter((result): result is NonNullable<typeof result> => result !== null)
+      .sort((a, b) => a.index - b.index);
+    
+    // Add screenshots to state in order with correct timestamps
+    // Use timeline startTime for consistency (it's the canonical test start time)
+    const timelineStartTimeMs = new Date(currentState.timeline.startTime).getTime();
+    for (const result of sortedResults) {
+      currentState = addScreenshot(currentState, result.url);
       
-      const screenshot = await captureScreenshot(
-        this.browserClient,
-        currentState.testId,
-        currentState.screenshots.length
+      // Calculate elapsedMs from capture timestamp relative to test start
+      const captureTimeMs = result.timestamp;
+      const elapsedMs = captureTimeMs - timelineStartTimeMs;
+      
+      currentState = addTimelineEvent(
+        currentState,
+        'screenshot_captured',
+        `Screenshot captured during gameplay (cycle ${result.decisionCycle})`,
+        {
+          index: result.index,
+          url: result.url,
+          decisionCycle: result.decisionCycle,
+          timestamp: result.timestamp,
+        },
+        elapsedMs // Use custom elapsedMs based on capture timestamp
       );
-      if (screenshot) {
-        currentState = addScreenshot(currentState, screenshot);
-      }
     }
     
+    const screenshotsCaptured = sortedResults.length;
+    
+    logger.info('Batch upload completed', {
+      testId: currentState.testId,
+      uploaded: screenshotsCaptured,
+      failed: pendingScreenshots.length - screenshotsCaptured,
+      uploadDurationMs: uploadDuration,
+    });
+
+    currentState = addTimelineEvent(currentState, 'gameplay_complete', 'Vision-based gameplay simulation completed', {
+      totalDecisions: decisionCount,
+      totalDurationMs: totalDuration,
+      screenshotsCaptured,
+      batchUploadDurationMs: uploadDuration,
+    });
+
     return currentState;
   }
 
@@ -647,12 +774,14 @@ export class QAAgent {
    * @param {AgentState} state - Agent state
    * @param {TestResult} result - Test result
    * @param {QAAgentRunParams} params - Test parameters
+   * @param {number} durationMs - Test duration in milliseconds
    * @private
    */
   private async saveResultsToDatabase(
     state: AgentState,
     result: TestResult,
-    params: QAAgentRunParams
+    params: QAAgentRunParams,
+    durationMs: number
   ): Promise<void> {
     if (!params.gameId) {
       logger.warn('Cannot save to database - no gameId provided', { testId: state.testId });
@@ -665,31 +794,76 @@ export class QAAgent {
         gameId: params.gameId,
       });
 
-      // Get BrowserBase session URL if available
-      const sessionUrl = this.browserClient.getSessionUrl()
+      // Browser session is local (no URL to capture)
+      const sessionUrl = null;
       
-      await saveTestRun({
-        game_id: params.gameId,
-        manifest_id: params.manifestId || null,
-        status: result.status,
-        playability_score: result.playability_score,
-        issues: result.issues,
-        screenshots: result.screenshots,
-        console_logs: result.console_logs,
-        execution_method: 'cli',
-        duration_ms: result.duration_ms || null,
-        metadata: {
-          testId: state.testId,
-          gameUrl: params.gameUrl,
-          gameName: params.gameName,
-          timeline: state.timeline.events as any,
-          browserbaseUrl: sessionUrl || null,
-          browserbaseSessionId: this.browserClient.getSessionId() || null,
-        } as any,
-      });
+      const db = getDatabase();
+      
+      // Check if a test run with this testId already exists (e.g., created by web API)
+      const { data: existingTestRun } = await db
+        .from('test_runs')
+        .select('id')
+        .eq('id', state.testId)
+        .single();
+      
+      const executionMethod = existingTestRun ? 'web' : 'cli';
+      
+      if (existingTestRun) {
+        // Update existing test run (created by web API)
+        logger.info('Updating existing test run', { testRunId: state.testId });
+        const { error: updateError } = await db
+          .from('test_runs')
+          // @ts-expect-error - Supabase type inference issue with partial updates
+          .update({
+            status: result.status,
+            playability_score: result.playability_score,
+            issues: result.issues,
+            screenshots: result.screenshots,
+            console_logs: result.console_logs,
+            execution_method: executionMethod,
+            duration_ms: durationMs,
+            metadata: {
+              testId: state.testId,
+              gameUrl: params.gameUrl,
+              gameName: params.gameName,
+              timeline: state.timeline.events as any,
+              browserbaseUrl: null,
+              browserbaseSessionId: null,
+            } as any,
+          } as any)
+          .eq('id', state.testId);
+        
+        if (updateError) {
+          logger.error('Failed to update existing test run', {
+            testId: state.testId,
+            error: updateError.message,
+          });
+          throw new StorageError(`Failed to update test run: ${updateError.message}`, { testId: state.testId, error: updateError });
+        }
+      } else {
+        // Create new test run (CLI execution)
+        await saveTestRun({
+          game_id: params.gameId,
+          manifest_id: params.manifestId || null,
+          status: result.status,
+          playability_score: result.playability_score,
+          issues: result.issues,
+          screenshots: result.screenshots,
+          console_logs: result.console_logs,
+          execution_method: executionMethod,
+          duration_ms: durationMs,
+          metadata: {
+            testId: state.testId,
+            gameUrl: params.gameUrl,
+            gameName: params.gameName,
+            timeline: state.timeline.events as any,
+            browserbaseUrl: null,
+            browserbaseSessionId: null,
+          } as any,
+        });
+      }
 
       // Update last_tested_at timestamp
-      const db = getDatabase();
       const gameUpdate: GameUpdate = { last_tested_at: new Date().toISOString() };
       const updateResult = await db
         .from('games')

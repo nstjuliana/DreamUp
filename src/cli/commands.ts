@@ -12,13 +12,16 @@
 import { Command } from 'commander';
 import { logger } from '../utils/logger.js';
 import { ValidationError } from '../utils/errors.js';
-import { findGameByUrl, getManifestsForGame, getManifestByVersion, createGame, createManifest } from '../storage/database.js';
+import { findGameByUrl, getManifestsForGame, getManifestByVersion, getActiveManifest, createGame, createManifest } from '../storage/database.js';
 import { QAAgent } from '../agent/qa-agent.js';
 import { outputResult, createErrorResult } from './output-formatter.js';
 import { validateUrl } from '../utils/validation.js';
 import { promptYesNo, promptText, promptSelect } from '../utils/prompt.js';
 import { parseManifest, readManifestFromFile, isValidLocalFile } from '../utils/manifest-parser.js';
 import { randomUUID } from 'crypto';
+import { executeBatch } from './batch-runner.js';
+import { outputBatchResult, convertToBatchResult } from './batch-output-formatter.js';
+import { getBatchReport } from '../storage/database.js';
 
 /**
  * Command options interface.
@@ -30,6 +33,12 @@ export interface CommandOptions {
   manifest?: string;
   /** Enable debug logging */
   debug?: boolean;
+  /** URL list file for batch testing */
+  list?: string;
+  /** Maximum concurrent processes for batch testing */
+  processes?: number;
+  /** Batch name for batch testing */
+  name?: string;
 }
 
 /**
@@ -54,6 +63,12 @@ async function executeTestCommand(gameUrlArg: string, options: CommandOptions): 
   const startTime = Date.now();
   
   try {
+    // Set DEBUG environment variable if debug flag is passed
+    // This allows BrowserClient to detect debug mode and run in headed mode
+    if (options.debug) {
+      process.env.DEBUG = 'true';
+    }
+    
     // Get URL from argument or --url option
     const gameUrl = gameUrlArg || options.url;
     
@@ -324,110 +339,73 @@ async function executeTestCommand(gameUrlArg: string, options: CommandOptions): 
         }
       }
     } else {
-      // Step 2: Check if manifests exist in DB
-      const allManifests = await getManifestsForGame(game.id);
+      // Step 2: No manifest provided - try to retrieve latest from Supabase
+      logger.info('No manifest provided, attempting to retrieve from Supabase', {
+        gameId: game.id,
+      });
       
-      if (allManifests.length === 0) {
-        // Step 3: No manifests found - error out
-        const errorResult = createErrorResult(
-          'No manifest found for this game. A manifest is required to run tests. Please create a manifest via Web UI or use --manifest flag if one exists.',
-          { game_url: validatedUrl, game_id: game.id }
-        );
-        outputResult(errorResult);
-        process.exit(1);
-      } else if (allManifests.length === 1) {
-        // Single manifest - use it automatically
+      // First, try to get active manifest
+      let selectedManifest = await getActiveManifest(game.id);
+      
+      if (!selectedManifest) {
+        // No active manifest - get all manifests and use the latest (first one, ordered by created_at desc)
+        const allManifests = await getManifestsForGame(game.id);
+        
+        if (allManifests.length === 0) {
+          // No manifests found - inform user and exit
+          logger.error('No manifest found for this game', {
+            gameId: game.id,
+            gameUrl: validatedUrl,
+          });
+          const errorResult = createErrorResult(
+            'No manifest found for this game. A manifest is required to run tests. Please create a manifest via Web UI or use --manifest flag to specify a manifest file or version.',
+            { game_url: validatedUrl, game_id: game.id }
+          );
+          outputResult(errorResult);
+          process.exit(1);
+        }
+        
+        // Use the latest manifest (first in list, ordered by created_at desc)
         selectedManifest = allManifests[0];
-        manifestId = selectedManifest.id;
-        logger.info('Single manifest found, using automatically', {
+        logger.info('Using latest manifest (no active manifest found)', {
+          manifestId: selectedManifest.id,
+          version: selectedManifest.version_name,
+          totalManifests: allManifests.length,
+        });
+      } else {
+        logger.info('Using active manifest', {
           manifestId: selectedManifest.id,
           version: selectedManifest.version_name,
         });
-        
-        try {
-          parsedManifest = parseManifest(selectedManifest.manifest_data);
-          logger.info('Manifest parsed successfully', {
-            manifestId: selectedManifest.id,
-            version: selectedManifest.version_name,
-            gameType: parsedManifest.gameType,
-          });
-        } catch (parseError) {
-          const message = parseError instanceof Error ? parseError.message : String(parseError);
-          logger.error('Failed to parse manifest', {
-            manifestId: selectedManifest.id,
-            error: message,
-          });
-          const errorResult = createErrorResult(
-            `Failed to parse manifest: ${message}`,
-            { game_url: validatedUrl, manifest_version: selectedManifest.version_name }
-          );
-          outputResult(errorResult);
-          process.exit(1);
-        }
-      } else {
-        // Multiple manifests - prompt user to select
-        logger.info('Multiple manifests found, prompting user to select', {
-          gameId: game.id,
-          count: allManifests.length,
+      }
+      
+      manifestId = selectedManifest.id;
+      
+      try {
+        parsedManifest = parseManifest(selectedManifest.manifest_data);
+        logger.info('Manifest parsed successfully', {
+          manifestId: selectedManifest.id,
+          version: selectedManifest.version_name,
+          gameType: parsedManifest.gameType,
         });
-
-        // Find active manifest index for default
-        const activeIndex = allManifests.findIndex(m => m.is_active);
-        const defaultIndex = activeIndex >= 0 ? activeIndex : 0;
-
-        // Build options list
-        const manifestOptions = allManifests.map((manifest) => ({
-          label: `${manifest.version_name}${manifest.is_active ? ' (active)' : ''}${manifest.notes ? ` - ${manifest.notes}` : ''}`,
-          value: manifest,
-        }));
-
-        try {
-          const selectedIndex = await promptSelect(
-            'Select manifest version to use:',
-            manifestOptions,
-            defaultIndex
-          );
-
-          selectedManifest = allManifests[selectedIndex];
-          manifestId = selectedManifest.id;
-          
-          logger.info('User selected manifest', {
-            manifestId: selectedManifest.id,
-            version: selectedManifest.version_name,
-          });
-
-          try {
-            parsedManifest = parseManifest(selectedManifest.manifest_data);
-            logger.info('Manifest parsed successfully', {
-              manifestId: selectedManifest.id,
-              version: selectedManifest.version_name,
-              gameType: parsedManifest.gameType,
-            });
-          } catch (parseError) {
-            const message = parseError instanceof Error ? parseError.message : String(parseError);
-            logger.error('Failed to parse manifest', {
-              manifestId: selectedManifest.id,
-              error: message,
-            });
-            const errorResult = createErrorResult(
-              `Failed to parse selected manifest: ${message}`,
-              { game_url: validatedUrl, manifest_version: selectedManifest.version_name }
-            );
-            outputResult(errorResult);
-            process.exit(1);
+      } catch (parseError) {
+        const message = parseError instanceof Error ? parseError.message : String(parseError);
+        logger.error('Failed to parse manifest', {
+          manifestId: selectedManifest.id,
+          version: selectedManifest.version_name,
+          error: message,
+        });
+        const errorResult = createErrorResult(
+          `Failed to parse manifest "${selectedManifest.version_name}" (ID: ${selectedManifest.id}): ${message}. Please fix the manifest via Web UI or use --manifest flag to specify a different manifest.`,
+          { 
+            game_url: validatedUrl, 
+            manifest_id: selectedManifest.id,
+            manifest_version: selectedManifest.version_name,
+            error: message
           }
-        } catch (promptError) {
-          const message = promptError instanceof Error ? promptError.message : String(promptError);
-          logger.error('Failed to prompt for manifest selection', {
-            error: message,
-          });
-          const errorResult = createErrorResult(
-            `Failed to select manifest: ${message}`,
-            { game_url: validatedUrl }
-          );
-          outputResult(errorResult);
-          process.exit(1);
-        }
+        );
+        outputResult(errorResult);
+        process.exit(1);
       }
     }
     
@@ -485,6 +463,115 @@ async function executeTestCommand(gameUrlArg: string, options: CommandOptions): 
 }
 
 /**
+ * Execute batch test command.
+ * 
+ * Handles batch testing with parallel execution. Performs the following:
+ * 1. Reads URLs from list file
+ * 2. Validates all games exist and have manifests
+ * 3. Executes tests in parallel with concurrency limit
+ * 4. Aggregates results and outputs summary JSON
+ * 
+ * @param {CommandOptions} options - Command options
+ * @returns {Promise<void>}
+ */
+async function executeBatchCommand(options: CommandOptions): Promise<void> {
+  const startTime = Date.now();
+  
+  try {
+    // Set DEBUG environment variable if debug flag is passed
+    if (options.debug) {
+      process.env.DEBUG = 'true';
+    }
+    
+    if (!options.list) {
+      throw new ValidationError('URL list file is required. Use -l or --list to specify a file.');
+    }
+
+    const maxConcurrency = options.processes || 5;
+    
+    if (maxConcurrency < 1 || maxConcurrency > 50) {
+      throw new ValidationError('Concurrency must be between 1 and 50');
+    }
+
+    logger.info('Starting batch test execution', {
+      urlListFile: options.list,
+      maxConcurrency,
+      batchName: options.name,
+    });
+
+    // Execute batch
+    const executionResult = await executeBatch({
+      urlListFile: options.list,
+      maxConcurrency,
+      batchName: options.name,
+    });
+
+    // Fetch batch report from database
+    const batchReport = await getBatchReport(executionResult.batchReportId);
+    
+    if (!batchReport) {
+      throw new Error(`Batch report not found: ${executionResult.batchReportId}`);
+    }
+
+    // Convert to output format and output
+    const batchResult = convertToBatchResult(executionResult, batchReport);
+    outputBatchResult(batchResult);
+    
+    // Exit with appropriate code
+    const exitCode = executionResult.errorTests > 0 ? 1 : 0;
+    process.exit(exitCode);
+    
+  } catch (error) {
+    const duration_ms = Date.now() - startTime;
+    
+    if (error instanceof Error) {
+      logger.error('Batch command failed', { error: error.message, duration_ms });
+      
+      // Output error in batch result format
+      const errorResult = {
+        batch_report_id: '',
+        status: 'partial_failure' as const,
+        total_tests: 0,
+        passed_tests: 0,
+        failed_tests: 0,
+        error_tests: 1,
+        started_at: new Date().toISOString(),
+        duration_ms,
+        test_results: [{
+          url: options.list || 'unknown',
+          status: 'error' as const,
+          error: error.message,
+        }],
+      };
+      
+      outputBatchResult(errorResult);
+    } else {
+      logger.error('Batch command failed with unknown error', { error, duration_ms });
+      
+      const errorResult = {
+        batch_report_id: '',
+        status: 'partial_failure' as const,
+        total_tests: 0,
+        passed_tests: 0,
+        failed_tests: 0,
+        error_tests: 1,
+        started_at: new Date().toISOString(),
+        duration_ms,
+        test_results: [{
+          url: options.list || 'unknown',
+          status: 'error' as const,
+          error: String(error),
+        }],
+      };
+      
+      outputBatchResult(errorResult);
+    }
+    
+    process.exit(1);
+  }
+}
+
+/**
  * Create and configure CLI program.
  * 
  * Sets up the Commander.js program with all commands and options.
@@ -511,7 +598,17 @@ export function createProgram(): Command {
     .option('-u, --url <url>', 'Game URL to test (alternative to positional argument)')
     .option('-m, --manifest <path-or-version>', 'Use manifest from local file path or DB version name (e.g., "manifest.json" or "v1.0")')
     .option('-d, --debug', 'Enable debug logging')
-    .action(executeTestCommand);
+    .option('-l, --list <file>', 'URL list file for batch testing (one URL per line)')
+    .option('-p, --processes <number>', 'Maximum concurrent processes for batch testing (default: 5)', (value) => parseInt(value, 10))
+    .option('-n, --name <name>', 'Optional name for batch test')
+    .action(async (gameUrlArg: string, options: CommandOptions) => {
+      // Check if batch mode (--list flag provided)
+      if (options.list) {
+        await executeBatchCommand(options);
+      } else {
+        await executeTestCommand(gameUrlArg, options);
+      }
+    });
 
   return program;
 }

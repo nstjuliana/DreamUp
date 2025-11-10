@@ -20,14 +20,18 @@ export type TimelineEventType =
   | 'test_start'
   | 'browser_init_start'
   | 'browser_init_complete'
+  | 'stagehand_init_complete'
   | 'page_load_start'
   | 'page_load_complete'
   | 'screenshot_captured'
   | 'start_button_search_start'
   | 'start_button_found'
+  | 'start_button_not_found'
   | 'start_button_clicked'
   | 'console_logs_collected'
   | 'gameplay_start'
+  | 'gameplay_action'
+  | 'gameplay_action_skipped'
   | 'gameplay_complete'
   | 'evaluation_start'
   | 'evaluation_complete'
@@ -110,6 +114,7 @@ export function createTimeline(): Timeline {
  * @param {TimelineEventType} type - Event type
  * @param {string} description - Human-readable event description
  * @param {Record<string, unknown>} [metadata] - Optional additional event data
+ * @param {number} [customElapsedMs] - Optional custom elapsed time in milliseconds (for retroactive events)
  * @returns {Timeline} Updated timeline
  * 
  * @example
@@ -117,18 +122,34 @@ export function createTimeline(): Timeline {
  * timeline = addEvent(timeline, 'page_load_start', 'Navigating to game URL', {
  *   url: 'https://example.com/game'
  * });
+ * 
+ * // With custom elapsed time (for events added retroactively)
+ * timeline = addEvent(timeline, 'screenshot_captured', 'Screenshot', {}, 5000);
  * ```
  */
 export function addEvent(
   timeline: Timeline,
   type: TimelineEventType,
   description: string,
-  metadata?: Record<string, unknown>
+  metadata?: Record<string, unknown>,
+  customElapsedMs?: number
 ): Timeline {
-  const timestamp = new Date().toISOString();
   const startTimeMs = new Date(timeline.startTime).getTime();
-  const currentTimeMs = new Date(timestamp).getTime();
-  const elapsedMs = currentTimeMs - startTimeMs;
+  
+  // Use custom elapsedMs if provided, otherwise calculate from current time
+  let elapsedMs: number;
+  let timestamp: string;
+  
+  if (customElapsedMs !== undefined) {
+    // Use custom elapsed time and calculate timestamp from start time
+    elapsedMs = customElapsedMs;
+    timestamp = new Date(startTimeMs + elapsedMs).toISOString();
+  } else {
+    // Use current time
+    timestamp = new Date().toISOString();
+    const currentTimeMs = new Date(timestamp).getTime();
+    elapsedMs = currentTimeMs - startTimeMs;
+  }
 
   const event: TimelineEvent = {
     type,

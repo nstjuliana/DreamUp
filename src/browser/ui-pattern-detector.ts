@@ -1,327 +1,271 @@
 /**
  * File: src/browser/ui-pattern-detector.ts
  * 
- * UI pattern detection for game interaction using StageHand AI.
+ * UI pattern detection for game interaction using Stagehand.
  * 
  * This module provides functions for detecting and interacting with game UI elements
- * using StageHand's AI-powered observe() and act() methods. All element-based detection
- * has been removed in favor of pure AI detection.
+ * using Stagehand's natural language click capabilities.
  * 
  * @module UIPatternDetector
  */
 
 import type { BrowserClient } from './browser-client.js';
+import type { Page } from 'playwright';
 import type { ManifestData } from '../storage/types.js';
-import type { Page } from '@browserbasehq/stagehand';
 import { captureScreenshot } from './screenshot-capture.js';
 import { BrowserError } from '../utils/errors.js';
 import { logger } from '../utils/logger.js';
+import type { StagehandClient } from './stagehand-client.js';
 
 /**
- * StageHand ObserveResult type (from @browserbasehq/stagehand).
- * Represents an actionable element discovered by AI.
- */
-export interface ObserveResult {
-  /** XPath selector to locate element */
-  selector: string;
-  /** Human-readable description of the element */
-  description: string;
-  /** Suggested action method (e.g., 'click', 'fill') */
-  method?: string;
-  /** Additional action parameters */
-  arguments?: string[];
-}
-
-/**
- * Element location result using StageHand AI.
+ * Button location result using Stagehand.
  */
 export interface ElementLocation {
-  /** StageHand ObserveResult for the element (null if not found) */
-  element: ObserveResult | null;
-  /** Method used to find the element */
-  method: 'ai-detection' | 'not-found';
-  /** Description used to find element */
-  description?: string;
+  /** Whether the element was found and clicked successfully */
+  success: boolean;
+  /** Method used to find/click the element */
+  method: 'stagehand-click' | 'not-found';
   /** Screenshot URL if element not found */
   failureScreenshot?: string | null;
-  /** All buttons found on page (for diagnostics) */
-  allButtonsFound?: ObserveResult[];
 }
 
 /**
- * Capture detailed failure information when start button not found.
- * 
- * Takes a screenshot, logs extensive details, and attempts to find all buttons
- * on the page for diagnostic purposes.
+ * Capture failure screenshot when start button not found.
  * 
  * @param {BrowserClient} client - Browser client instance
  * @param {string} testId - Test run identifier
- * @param {string[]} attemptedDescriptions - All descriptions that were tried
- * @returns {Promise<{screenshot: string | null, allButtons: ObserveResult[]}>} Failure diagnostics
+ * @returns {Promise<string | null>} Screenshot URL or null if failed
  * @private
  */
 async function captureStartButtonFailure(
   client: BrowserClient,
-  testId: string,
-  attemptedDescriptions: string[]
-): Promise<{ screenshot: string | null; allButtons: ObserveResult[] }> {
-  const page = client.getPage();
-  
-  logger.error('Start button not found by StageHand AI - capturing diagnostics', {
-    testId,
-    attemptedDescriptions,
-  });
-
-  // Capture screenshot showing page state
-  let screenshot: string | null = null;
+  testId: string
+): Promise<string | null> {
   try {
-    screenshot = await captureScreenshot(client, testId, 999); // Use high number for failure screenshot
+    const screenshot = await captureScreenshot(client, testId, 999); // Use high number for failure screenshot
     logger.info('Failure screenshot captured', { 
       testId,
       screenshotUrl: screenshot 
     });
+    return screenshot;
   } catch (screenshotError) {
     logger.error('Failed to capture failure screenshot', {
       testId,
       error: screenshotError instanceof Error ? screenshotError.message : String(screenshotError),
     });
+    return null;
   }
-
-  // Get page information for diagnostics
-  let pageUrl = 'unknown';
-  let pageTitle = 'unknown';
-  try {
-    pageUrl = page.url();
-    pageTitle = await page.title();
-  } catch (error) {
-    logger.warn('Failed to get page info', {
-      error: error instanceof Error ? error.message : String(error),
-    });
-  }
-
-  // Try to observe ALL buttons on page for diagnostics
-  let allButtons: ObserveResult[] = [];
-  try {
-    logger.info('Attempting to find all buttons on page for diagnostics', { testId });
-    allButtons = await page.observe("Find all clickable buttons on the page");
-    
-    logger.info('All buttons found on page for diagnostics', {
-      testId,
-      buttonCount: allButtons.length,
-      buttons: allButtons.map(btn => ({
-        description: btn.description,
-        method: btn.method,
-        selector: btn.selector,
-      })),
-    });
-
-    // Print to console for visibility
-    console.log('\n' + '='.repeat(80));
-    console.log('🔍 START BUTTON NOT FOUND - DIAGNOSTIC INFORMATION');
-    console.log('='.repeat(80));
-    console.log(`Test ID: ${testId}`);
-    console.log(`Page URL: ${pageUrl}`);
-    console.log(`Page Title: ${pageTitle}`);
-    console.log(`\nAttempted Descriptions:`);
-    attemptedDescriptions.forEach((desc, i) => {
-      console.log(`  ${i + 1}. "${desc}"`);
-    });
-    console.log(`\nAll Buttons Found on Page (${allButtons.length}):`);
-    allButtons.forEach((btn, i) => {
-      console.log(`  ${i + 1}. ${btn.description}`);
-      console.log(`     Method: ${btn.method || 'none'}`);
-      console.log(`     Selector: ${btn.selector}`);
-    });
-    console.log(`\nFailure Screenshot: ${screenshot || 'not available'}`);
-    console.log('='.repeat(80) + '\n');
-  } catch (observeError) {
-    logger.warn('Failed to observe all buttons for diagnostics', {
-      testId,
-      error: observeError instanceof Error ? observeError.message : String(observeError),
-    });
-  }
-
-  return { screenshot, allButtons };
 }
 
 /**
- * Find start button using StageHand AI.
+ * Find and click start button using Stagehand.
  * 
- * Uses StageHand's observe() API to find the start button with multiple
- * descriptive queries. If no button is found, captures detailed failure
- * information including screenshots and all buttons on the page.
- * 
- * Ignores manifest data - relies entirely on AI detection.
+ * Uses Stagehand's natural language capabilities to identify and click the start button.
+ * Attempts common variations like "start button", "play button", "begin button".
  * 
  * @param {BrowserClient} client - Browser client instance
- * @param {ManifestData | null} manifest - Ignored (kept for backwards compatibility)
- * @returns {Promise<ElementLocation>} Element location result
+ * @param {StagehandClient} stagehandClient - Stagehand client instance
+ * @param {string} testId - Test run identifier for logging and screenshots
+ * @returns {Promise<ElementLocation>} Element location result indicating success/failure
  * 
  * @example
  * ```typescript
- * const location = await findStartButton(client, manifest);
- * if (location.element) {
- *   await clickElement(client, location);
+ * const location = await findStartButton(client, stagehandClient, 'test-123');
+ * if (location.success) {
+ *   logger.info('Start button clicked successfully');
  * }
  * ```
  */
 export async function findStartButton(
   client: BrowserClient,
-  manifest: ManifestData | null
+  stagehandClient: StagehandClient | null,
+  testId: string
 ): Promise<ElementLocation> {
-  const page = client.getPage();
-  const testId = 'unknown'; // Will be passed from caller in future
+  logger.info('Finding start button', { testId });
 
-  logger.info('Finding start button using StageHand AI observe()', { testId });
-
-  // Multiple descriptive queries to try
-  const descriptions = [
-    "Find the start game button",
-    "Find the play button",
-    "Find the begin button",
-    "Find the button to start playing",
-    "Find the start button",
+  // Common button selectors to try with standard Playwright
+  const buttonSelectors = [
+    'button:has-text("Start")',
+    'button:has-text("Play")',
+    'button:has-text("Begin")',
+    '[id*="start"]',
+    '[id*="play"]',
+    '[class*="start"]',
+    '[class*="play"]',
+    'a:has-text("Start")',
+    'a:has-text("Play")',
   ];
 
-  // Try each description
-  for (const description of descriptions) {
+  const page = client.getPage();
+  
+  // Try standard Playwright click
+  for (const selector of buttonSelectors) {
     try {
-      logger.info('Attempting to find start button with StageHand', {
-        testId,
-        description,
-      });
-
-      const results = await page.observe(description);
+      logger.debug('Attempting to click button', { testId, selector });
+      const button = page.locator(selector).first();
+      const count = await button.count();
       
-      if (results && results.length > 0) {
-        // Filter for click-able buttons
-        const clickableButton = results.find(r => r.method === 'click');
-        
-        if (clickableButton) {
-          logger.info('Start button found using StageHand AI', {
-            testId,
-            description,
-            buttonDescription: clickableButton.description,
-            method: clickableButton.method,
-            selector: clickableButton.selector,
-          });
-
-          return {
-            element: clickableButton,
-            method: 'ai-detection',
-            description,
-          };
-        } else {
-          logger.debug('Elements found but none are clickable buttons', {
-            testId,
-            description,
-            resultCount: results.length,
-          });
-        }
-      } else {
-        logger.debug('No elements found for description', {
-          testId,
-          description,
-        });
+      if (count > 0) {
+        await button.click({ timeout: 2000 });
+        logger.info('Start button clicked successfully', { testId, selector });
+        await new Promise(resolve => setTimeout(resolve, 1000)); // Wait for game to start
+        return {
+          success: true,
+          method: 'stagehand-click',
+        };
       }
     } catch (error) {
-      logger.warn('StageHand observe() failed for description', {
+      logger.debug('Button click failed, trying next selector', {
         testId,
-        description,
+        selector,
         error: error instanceof Error ? error.message : String(error),
       });
     }
   }
 
-  // No button found - capture failure diagnostics
-  logger.warn('Start button not found using any StageHand description', {
-    testId,
-    attemptedCount: descriptions.length,
-  });
-
-  const failureInfo = await captureStartButtonFailure(client, testId, descriptions);
-
+  // All variations failed
+  logger.warn('Start button not found', { testId });
+  const failureScreenshot = await captureStartButtonFailure(client, testId);
   return {
-    element: null,
+    success: false,
     method: 'not-found',
-    failureScreenshot: failureInfo.screenshot,
-    allButtonsFound: failureInfo.allButtons,
+    failureScreenshot,
   };
 }
 
 /**
- * Click an element using StageHand's act() method.
+ * Show visual click indicator overlay on page.
  * 
- * Uses StageHand's AI-powered act() to click the element. This is more
- * reliable than direct Playwright clicking as it can handle dynamic pages.
+ * Injects a visual overlay (crosshair and circle) at the specified coordinates
+ * to help debug click targeting issues.
  * 
- * @param {BrowserClient} client - Browser client instance
- * @param {ElementLocation} location - Element location from findStartButton
- * @returns {Promise<boolean>} True if click succeeded, false otherwise
- * @throws {BrowserError} If element is not available for clicking
+ * @param {Page} page - Playwright page instance
+ * @param {number} x - X coordinate
+ * @param {number} y - Y coordinate
+ * @returns {Promise<void>}
+ */
+export async function showClickIndicator(page: Page, x: number, y: number): Promise<void> {
+  const overlayId = 'dreamup-click-indicator';
+  const overlayHTML = `
+    <div id="${overlayId}" style="
+      position: fixed;
+      left: 0;
+      top: 0;
+      width: 100vw;
+      height: 100vh;
+      pointer-events: none;
+      z-index: 999999;
+      display: block;
+    ">
+      <!-- Circle indicator -->
+      <div style="
+        position: absolute;
+        left: ${x - 15}px;
+        top: ${y - 15}px;
+        width: 30px;
+        height: 30px;
+        border: 3px solid #ff0000;
+        border-radius: 50%;
+        background: rgba(255, 0, 0, 0.2);
+        pointer-events: none;
+        box-shadow: 0 0 10px rgba(255, 0, 0, 0.5);
+      "></div>
+      <!-- Crosshair lines -->
+      <div style="
+        position: absolute;
+        left: ${x - 1}px;
+        top: ${y - 20}px;
+        width: 2px;
+        height: 40px;
+        background: #ff0000;
+        pointer-events: none;
+        box-shadow: 0 0 5px rgba(255, 0, 0, 0.8);
+      "></div>
+      <div style="
+        position: absolute;
+        left: ${x - 20}px;
+        top: ${y - 1}px;
+        width: 40px;
+        height: 2px;
+        background: #ff0000;
+        pointer-events: none;
+        box-shadow: 0 0 5px rgba(255, 0, 0, 0.8);
+      "></div>
+      <!-- Coordinate label -->
+      <div style="
+        position: absolute;
+        left: ${x + 20}px;
+        top: ${y - 20}px;
+        background: rgba(0, 0, 0, 0.8);
+        color: #ffffff;
+        padding: 4px 8px;
+        border-radius: 4px;
+        font-family: monospace;
+        font-size: 12px;
+        pointer-events: none;
+        white-space: nowrap;
+      ">(${x}, ${y})</div>
+    </div>
+  `;
+
+  await page.evaluate((html: string) => {
+    // Remove existing indicator if present
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const doc = (globalThis as any).document;
+    const existing = doc.getElementById('dreamup-click-indicator');
+    if (existing) {
+      existing.remove();
+    }
+    // Add new indicator
+    doc.body.insertAdjacentHTML('beforeend', html);
+  }, overlayHTML);
+
+  // Wait briefly for the indicator to be visible
+  await new Promise(resolve => setTimeout(resolve, 100));
+}
+
+/**
+ * Hide visual click indicator overlay.
  * 
- * @example
- * ```typescript
- * const location = await findStartButton(client, manifest);
- * if (location.element) {
- *   await clickElement(client, location);
- * }
- * ```
+ * Removes the click indicator overlay from the page.
+ * 
+ * @param {Page} page - Playwright page instance
+ * @returns {Promise<void>}
+ */
+export async function hideClickIndicator(page: Page): Promise<void> {
+  await page.evaluate(() => {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const doc = (globalThis as any).document;
+    const indicator = doc.getElementById('dreamup-click-indicator');
+    if (indicator) {
+      indicator.remove();
+    }
+  });
+}
+
+/**
+ * Click an element using Stagehand (deprecated - kept for compatibility).
+ * 
+ * This function is kept for backward compatibility but is no longer needed
+ * since findStartButton now handles clicking directly via Stagehand.
+ * 
+ * @deprecated Use StagehandClient.clickElement() directly instead
  */
 export async function clickElement(
   client: BrowserClient,
-  location: ElementLocation
-): Promise<boolean> {
-  if (!location.element) {
-    throw new BrowserError('Cannot click element - element not available', {
-      method: location.method,
-      failureScreenshot: location.failureScreenshot,
-    });
+  location: ElementLocation,
+  options: { testId?: string; screenshotIndex?: number } = {}
+): Promise<{ success: boolean; indicatorScreenshotUrl?: string }> {
+  // If already successful (from findStartButton), just return success
+  if (location.success) {
+    return { success: true };
   }
-
-  const page = client.getPage();
-  const element = location.element;
-
-  try {
-    logger.info('Clicking element using StageHand act()', {
-      method: location.method,
-      description: element.description,
-      selector: element.selector,
-      actionMethod: element.method,
-    });
-
-    // Log element details
-    console.log('\n📋 ELEMENT DETAILS (StageHand):');
-    console.log(`   Description: ${element.description}`);
-    console.log(`   Method: ${element.method}`);
-    console.log(`   Selector: ${element.selector}`);
-    console.log(`   Detection Method: ${location.method}`);
-    console.log('');
-
-    // Use StageHand's act() to click the element
-    // This is more reliable than direct clicking as StageHand handles
-    // scrolling, waiting, and element state automatically
-    await page.act(element);
-
-    logger.info('Element clicked successfully using StageHand', {
-      description: element.description,
-      selector: element.selector,
-    });
-
-    return true;
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    logger.error('Failed to click element using StageHand', {
-      description: element.description,
-      selector: element.selector,
-      error: message,
-    });
-    throw new BrowserError(`Failed to click element: ${message}`, {
-      description: element.description,
-      selector: element.selector,
-      error: message,
-    });
-  }
+  
+  // Otherwise, element was not found
+  throw new BrowserError('Cannot click element - element not found', {
+    method: location.method,
+    failureScreenshot: location.failureScreenshot,
+  });
 }
 
 /**

@@ -10,7 +10,7 @@
  */
 
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
-import type { Database, Game, GameManifest, TestRun, GameInsert, GameManifestInsert, TestRunInsert } from './types.js';
+import type { Database, Game, GameManifest, TestRun, GameInsert, GameManifestInsert, TestRunInsert, BatchReport, BatchReportInsert, BatchReportUpdate } from './types.js';
 import { getConfig } from '../utils/config.js';
 import { StorageError } from '../utils/errors.js';
 import { logger } from '../utils/logger.js';
@@ -350,6 +350,190 @@ export async function listGames(limit = 100): Promise<Game[]> {
   if (error) {
     logger.error('Failed to list games', { error: error.message });
     throw new StorageError(`Failed to list games: ${error.message}`, { error });
+  }
+
+  return data || [];
+}
+
+/**
+ * Create a new batch report.
+ * 
+ * @param {BatchReportInsert} batchReport - Batch report data to insert
+ * @returns {Promise<BatchReport>} Created batch report record
+ * @throws {StorageError} If database insert fails
+ * 
+ * @example
+ * ```typescript
+ * const batchReport = await createBatchReport({
+ *   batch_name: 'Nightly Tests',
+ *   status: 'running',
+ *   total_tests: 10,
+ *   execution_method: 'cli'
+ * });
+ * ```
+ */
+export async function createBatchReport(batchReport: BatchReportInsert): Promise<BatchReport> {
+  const db = getDatabase();
+  
+  const { data, error } = await db
+    .from('batch_reports')
+    .insert(batchReport as any)
+    .select()
+    .single();
+
+  if (error || !data) {
+    logger.error('Failed to create batch report', { batchReport, error: error?.message });
+    throw new StorageError(`Failed to create batch report: ${error?.message}`, { batchReport, error });
+  }
+
+  logger.info('Batch report created', { batchReportId: (data as any).id, status: (data as any).status });
+  return data as BatchReport;
+}
+
+/**
+ * Update an existing batch report.
+ * 
+ * @param {string} id - Batch report ID
+ * @param {BatchReportUpdate} updates - Fields to update
+ * @returns {Promise<BatchReport>} Updated batch report record
+ * @throws {StorageError} If database update fails
+ * 
+ * @example
+ * ```typescript
+ * const updated = await updateBatchReport(batchId, {
+ *   status: 'completed',
+ *   completed_at: new Date().toISOString()
+ * });
+ * ```
+ */
+export async function updateBatchReport(id: string, updates: BatchReportUpdate): Promise<BatchReport> {
+  const db = getDatabase();
+  
+  const { data, error } = await db
+    .from('batch_reports')
+    .update(updates as any)
+    .eq('id', id)
+    .select()
+    .single();
+
+  if (error || !data) {
+    logger.error('Failed to update batch report', { id, updates, error: error?.message });
+    throw new StorageError(`Failed to update batch report: ${error?.message}`, { id, updates, error });
+  }
+
+  logger.info('Batch report updated', { batchReportId: id, status: (data as any).status });
+  return data as BatchReport;
+}
+
+/**
+ * Get a batch report by ID.
+ * 
+ * @param {string} id - Batch report ID
+ * @returns {Promise<BatchReport | null>} Batch report or null if not found
+ * @throws {StorageError} If database query fails
+ * 
+ * @example
+ * ```typescript
+ * const batchReport = await getBatchReport(batchId);
+ * ```
+ */
+export async function getBatchReport(id: string): Promise<BatchReport | null> {
+  const db = getDatabase();
+  
+  const { data, error } = await db
+    .from('batch_reports')
+    .select('*')
+    .eq('id', id)
+    .single();
+
+  if (error && error.code !== 'PGRST116') {
+    logger.error('Failed to get batch report', { id, error: error.message });
+    throw new StorageError(`Failed to get batch report: ${error.message}`, { id, error });
+  }
+
+  return data;
+}
+
+/**
+ * Get a batch report with all associated test runs.
+ * 
+ * @param {string} id - Batch report ID
+ * @returns {Promise<BatchReport & { test_runs: TestRun[] } | null>} Batch report with test runs or null if not found
+ * @throws {StorageError} If database query fails
+ * 
+ * @example
+ * ```typescript
+ * const batchReport = await getBatchReportWithTests(batchId);
+ * console.log(`Found ${batchReport.test_runs.length} test runs`);
+ * ```
+ */
+export async function getBatchReportWithTests(id: string): Promise<(BatchReport & { test_runs: TestRun[] }) | null> {
+  const db = getDatabase();
+  
+  const { data: batchReport, error: batchError } = await db
+    .from('batch_reports')
+    .select('*')
+    .eq('id', id)
+    .single();
+
+  if (batchError && batchError.code !== 'PGRST116') {
+    logger.error('Failed to get batch report', { id, error: batchError.message });
+    throw new StorageError(`Failed to get batch report: ${batchError.message}`, { id, error: batchError });
+  }
+
+  if (!batchReport) {
+    return null;
+  }
+
+  // Fetch all test runs for this batch
+  if (batchReport.test_run_ids && batchReport.test_run_ids.length > 0) {
+    const { data: testRuns, error: testRunsError } = await db
+      .from('test_runs')
+      .select('*')
+      .in('id', batchReport.test_run_ids);
+
+    if (testRunsError) {
+      logger.error('Failed to get test runs for batch', { id, error: testRunsError.message });
+      throw new StorageError(`Failed to get test runs: ${testRunsError.message}`, { id, error: testRunsError });
+    }
+
+    return {
+      ...(batchReport as BatchReport),
+      test_runs: testRuns || [],
+    };
+  }
+
+  return {
+    ...(batchReport as BatchReport),
+    test_runs: [],
+  };
+}
+
+/**
+ * List all batch reports.
+ * 
+ * @param {number} [limit=50] - Maximum number of results to return
+ * @returns {Promise<BatchReport[]>} Array of batch report records
+ * @throws {StorageError} If database query fails
+ * 
+ * @example
+ * ```typescript
+ * const batches = await listBatchReports(20);
+ * console.log(`Found ${batches.length} batch reports`);
+ * ```
+ */
+export async function listBatchReports(limit = 50): Promise<BatchReport[]> {
+  const db = getDatabase();
+  
+  const { data, error } = await db
+    .from('batch_reports')
+    .select('*')
+    .order('started_at', { ascending: false })
+    .limit(limit);
+
+  if (error) {
+    logger.error('Failed to list batch reports', { error: error.message });
+    throw new StorageError(`Failed to list batch reports: ${error.message}`, { error });
   }
 
   return data || [];

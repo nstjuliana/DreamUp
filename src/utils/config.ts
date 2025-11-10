@@ -28,10 +28,6 @@ export interface Config {
     anonKey: string; // Accepts both new (sb_publishable_...) and legacy (anon) keys
     serviceRoleKey: string; // Accepts both new (sb_secret_...) and legacy (service_role) keys
   };
-  browserbase: {
-    apiKey: string;
-    projectId: string;
-  };
   llm: {
     provider: 'openai' | 'anthropic';
     apiKey: string;
@@ -198,10 +194,6 @@ export function loadConfig(): Config {
     'secret/service_role key'
   );
 
-  // Validate Browserbase configuration
-  const browserbaseApiKey = getRequiredEnv('BROWSERBASE_API_KEY');
-  const browserbaseProjectId = getRequiredEnv('BROWSERBASE_PROJECT_ID');
-
   // Validate LLM configuration
   const llmProviderRaw = getRequiredEnv('LLM_PROVIDER');
   const llmProvider = validateLLMProvider(llmProviderRaw);
@@ -213,10 +205,6 @@ export function loadConfig(): Config {
       url: supabaseUrl,
       anonKey: supabaseAnonKey,
       serviceRoleKey: supabaseServiceRoleKey,
-    },
-    browserbase: {
-      apiKey: browserbaseApiKey,
-      projectId: browserbaseProjectId,
     },
     llm: {
       provider: llmProvider,

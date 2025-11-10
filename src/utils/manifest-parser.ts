@@ -143,11 +143,10 @@ export function parseManifest(manifestData: Json): ManifestData {
 
   const manifest = manifestData as Record<string, unknown>;
 
-  // Validate version
-  if (manifest.version !== '1.0') {
-    throw new ValidationError(`Unsupported manifest version: ${manifest.version}`, {
+  // Validate version (must be a non-empty string)
+  if (!manifest.version || typeof manifest.version !== 'string' || manifest.version.trim().length === 0) {
+    throw new ValidationError(`Manifest must include a valid version string`, {
       version: manifest.version,
-      expectedVersion: '1.0',
     });
   }
 
@@ -187,23 +186,7 @@ export function parseManifest(manifestData: Json): ManifestData {
     });
   }
 
-  // Validate startButton if present
-  let startButton: ManifestData['startButton'] | undefined;
-  if (manifest.startButton) {
-    if (typeof manifest.startButton !== 'object') {
-      throw new ValidationError('Manifest startButton must be an object', {
-        startButton: manifest.startButton,
-      });
-    }
 
-    const sb = manifest.startButton as Record<string, unknown>;
-    startButton = {
-      selector: sb.selector as string | undefined,
-      text: sb.text as string | undefined,
-      position: sb.position as string | undefined,
-      waitAfterClick: sb.waitAfterClick as number | undefined,
-    };
-  }
 
   // Validate gameStates if present
   let gameStates: GameState[] | undefined;
@@ -239,7 +222,7 @@ export function parseManifest(manifestData: Json): ManifestData {
 
   // Build validated manifest
   const parsed: ManifestData = {
-    version: '1.0',
+    version: manifest.version as ManifestData['version'],
     gameType: manifest.gameType as ManifestData['gameType'],
     controls: {
       primary: controls.primary as string[],
@@ -253,12 +236,8 @@ export function parseManifest(manifestData: Json): ManifestData {
           )
         : undefined,
     },
-    startButton,
     gameStates,
     loadingDuration: typeof manifest.loadingDuration === 'number' ? manifest.loadingDuration : undefined,
-    screenshotIntervals: Array.isArray(manifest.screenshotIntervals)
-      ? (manifest.screenshotIntervals as number[]).filter((i: unknown) => typeof i === 'number')
-      : undefined,
     gameplayDuration: typeof manifest.gameplayDuration === 'number' ? manifest.gameplayDuration : undefined,
     gameplayGoal: typeof manifest.gameplayGoal === 'string' ? manifest.gameplayGoal : undefined,
     aiDecisionInterval: typeof manifest.aiDecisionInterval === 'number' ? manifest.aiDecisionInterval : undefined,
@@ -267,7 +246,6 @@ export function parseManifest(manifestData: Json): ManifestData {
 
   logger.debug('Manifest parsed successfully', {
     gameType: parsed.gameType,
-    hasStartButton: !!parsed.startButton,
     gameStateCount: parsed.gameStates?.length || 0,
   });
 
@@ -318,18 +296,6 @@ export function validateControlsForGameType(manifest: ManifestData): boolean {
 }
 
 /**
- * Extract start button configuration from manifest.
- * 
- * Returns the start button configuration if available, or null if not specified.
- * 
- * @param {ManifestData} manifest - Parsed manifest data
- * @returns {ManifestData['startButton']} Start button config or null
- */
-export function getStartButtonConfig(manifest: ManifestData): ManifestData['startButton'] | null {
-  return manifest.startButton || null;
-}
-
-/**
  * Get gameplay duration from manifest or return default.
  * 
  * Returns the gameplay duration specified in the manifest, or a default
@@ -344,22 +310,6 @@ export function getGameplayDuration(manifest: ManifestData | null, defaultDurati
     return manifest.gameplayDuration;
   }
   return defaultDurationMs;
-}
-
-/**
- * Get screenshot intervals from manifest or return null for event-based.
- * 
- * Returns the screenshot intervals array if specified in manifest for
- * time-based capture, or null to use event-based capture.
- * 
- * @param {ManifestData | null} manifest - Parsed manifest data or null
- * @returns {number[] | null} Screenshot intervals in milliseconds, or null for event-based
- */
-export function getScreenshotIntervals(manifest: ManifestData | null): number[] | null {
-  if (manifest?.screenshotIntervals && manifest.screenshotIntervals.length > 0) {
-    return manifest.screenshotIntervals;
-  }
-  return null;
 }
 
 /**

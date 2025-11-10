@@ -278,6 +278,7 @@ export function getErrorSummary(state: AgentState): {
  * @param {TimelineEventType} type - Event type
  * @param {string} description - Human-readable event description
  * @param {Record<string, unknown>} [metadata] - Optional additional event data
+ * @param {number} [customElapsedMs] - Optional custom elapsed time in milliseconds (for retroactive events)
  * @returns {AgentState} Updated agent state with new timeline event
  * 
  * @example
@@ -285,17 +286,21 @@ export function getErrorSummary(state: AgentState): {
  * state = addTimelineEvent(state, 'page_load_start', 'Navigating to game URL', {
  *   url: gameUrl
  * });
+ * 
+ * // With custom elapsed time (for events added retroactively)
+ * state = addTimelineEvent(state, 'screenshot_captured', 'Screenshot', {}, 5000);
  * ```
  */
 export function addTimelineEvent(
   state: AgentState,
   type: TimelineEventType,
   description: string,
-  metadata?: Record<string, unknown>
+  metadata?: Record<string, unknown>,
+  customElapsedMs?: number
 ): AgentState {
   return {
     ...state,
-    timeline: addEvent(state.timeline, type, description, metadata),
+    timeline: addEvent(state.timeline, type, description, metadata, customElapsedMs),
   };
 }
 

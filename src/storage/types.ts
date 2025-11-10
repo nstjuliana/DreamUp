@@ -134,6 +134,50 @@ export interface Database {
           metadata?: Json;
         };
       };
+      batch_reports: {
+        Row: {
+          id: string;
+          batch_name: string | null;
+          status: 'running' | 'completed' | 'partial_failure';
+          total_tests: number;
+          passed_tests: number;
+          failed_tests: number;
+          error_tests: number;
+          test_run_ids: string[];
+          started_at: string;
+          completed_at: string | null;
+          execution_method: 'cli' | 'web' | null;
+          metadata: Json;
+        };
+        Insert: {
+          id?: string;
+          batch_name?: string | null;
+          status: 'running' | 'completed' | 'partial_failure';
+          total_tests?: number;
+          passed_tests?: number;
+          failed_tests?: number;
+          error_tests?: number;
+          test_run_ids?: string[];
+          started_at?: string;
+          completed_at?: string | null;
+          execution_method?: 'cli' | 'web' | null;
+          metadata?: Json;
+        };
+        Update: {
+          id?: string;
+          batch_name?: string | null;
+          status?: 'running' | 'completed' | 'partial_failure';
+          total_tests?: number;
+          passed_tests?: number;
+          failed_tests?: number;
+          error_tests?: number;
+          test_run_ids?: string[];
+          started_at?: string;
+          completed_at?: string | null;
+          execution_method?: 'cli' | 'web' | null;
+          metadata?: Json;
+        };
+      };
     };
     Views: {
       [_ in never]: never;
@@ -160,9 +204,13 @@ export type TestRun = Database['public']['Tables']['test_runs']['Row'];
 export type TestRunInsert = Database['public']['Tables']['test_runs']['Insert'];
 export type TestRunUpdate = Database['public']['Tables']['test_runs']['Update'];
 
+export type BatchReport = Database['public']['Tables']['batch_reports']['Row'];
+export type BatchReportInsert = Database['public']['Tables']['batch_reports']['Insert'];
+export type BatchReportUpdate = Database['public']['Tables']['batch_reports']['Update'];
+
 // Game manifest structure (from manifest_data JSONB field)
 export interface ManifestData {
-  version: '1.0';
+  version: string; // Any version string (e.g., '1.0', '1.1', '2.0', etc.)
   gameType: 'puzzle' | 'platformer' | 'idle' | 'shooter' | 'rpg' | 'other';
   controls: {
     primary: string[];
@@ -170,15 +218,8 @@ export interface ManifestData {
     mouse?: boolean;
     mouseActions?: ('click' | 'drag' | 'scroll')[];
   };
-  startButton?: {
-    selector?: string;
-    text?: string;
-    position?: string;
-    waitAfterClick?: number;
-  };
   gameStates?: GameState[];
   loadingDuration?: number;
-  screenshotIntervals?: number[]; // Time-based screenshot intervals (ms)
   gameplayDuration?: number; // Gameplay simulation duration (ms, default 30-60s)
   gameplayGoal?: string; // Custom goal for AI gameplay (e.g., "Collect as many coins as possible")
   aiDecisionInterval?: number; // Milliseconds between AI decisions during gameplay (default 2000ms)
